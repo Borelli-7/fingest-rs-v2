@@ -1,0 +1,20 @@
+[package]
+name = "fingest-plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Compile-time plugin registry. No dynamic loading — see ADR-004."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

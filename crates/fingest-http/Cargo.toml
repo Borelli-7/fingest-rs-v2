@@ -1,0 +1,28 @@
+[package]
+name = "fingest-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Inbound HTTP adapter: actix routes, extractors and error mapping."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-contracts = { path = "../fingest-contracts" }
+fingest-catalog-core = { path = "../fingest-catalog-core" }
+fingest-identity-core = { path = "../fingest-identity-core" }
+fingest-wallets-core = { path = "../fingest-wallets-core" }
+fingest-planning-core = { path = "../fingest-planning-core" }
+actix-web = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+actix-rt = "2.10"
+fingest-catalog-core = { path = "../fingest-catalog-core", features = ["test-support"] }
+fingest-identity-core = { path = "../fingest-identity-core", features = ["test-support"] }
+fingest-wallets-core = { path = "../fingest-wallets-core", features = ["test-support"] }
+
+[lints]
+workspace = true

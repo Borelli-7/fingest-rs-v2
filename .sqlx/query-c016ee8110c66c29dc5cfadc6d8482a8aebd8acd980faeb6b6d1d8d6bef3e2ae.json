@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO expense\n               (wallet_id, amount_amount, amount_currency, date, description,\n                category_name, category_profit)\n               VALUES (9001, 10.00, 'USD', DATE '2024-01-01', 'lunch', 'Food', false)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c016ee8110c66c29dc5cfadc6d8482a8aebd8acd980faeb6b6d1d8d6bef3e2ae"
+}

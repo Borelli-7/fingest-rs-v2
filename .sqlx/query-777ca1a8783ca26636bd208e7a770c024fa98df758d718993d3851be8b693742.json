@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, amount_amount, amount_currency, date, description,\n                      category_name, category_profit\n               FROM expense\n               WHERE wallet_id = $1 AND date BETWEEN $2 AND $3\n               ORDER BY date, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "amount_amount",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 2,
+        "name": "amount_currency",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "category_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "category_profit",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "777ca1a8783ca26636bd208e7a770c024fa98df758d718993d3851be8b693742"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM account WHERE login = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "51dced93e58cd6f5fa52d8c61467a4a437184ee70c793d3e2c8fcf0b1dd0e844"
+}

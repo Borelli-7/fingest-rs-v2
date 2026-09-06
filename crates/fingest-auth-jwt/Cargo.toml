@@ -1,0 +1,17 @@
+[package]
+name = "fingest-auth-jwt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "bcrypt and jsonwebtoken adapters for the identity ports."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-identity-core = { path = "../fingest-identity-core" }
+jsonwebtoken = { workspace = true }
+bcrypt = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

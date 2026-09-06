@@ -1,0 +1,873 @@
+{
+  "info": {
+    "name": "FinGest v2 API",
+    "description": "Contract suite for fingest-rs-v2.\n\nDiffers from the v1 collection because v2 closes the authentication hole: v1's JwtAuth middleware was never wired, so every /resources route was open. Requests here send a Bearer token, and the Security folder asserts that unauthenticated access is refused.\n\nRun the whole collection in order — Authentication seeds the tokens every later folder depends on.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "auth_token", "value": "" },
+    { "key": "admin_token", "value": "" },
+    { "key": "wallet_id", "value": "" },
+    { "key": "expense_id", "value": "" },
+    { "key": "budget_id", "value": "" },
+    { "key": "new_user", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 Authentication",
+      "item": [
+        {
+          "name": "Login as admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns a token and the user', () => {",
+                  "  pm.expect(body.token).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.user.login).to.eql('admin');",
+                  "  pm.expect(body.user.admin).to.be.true;",
+                  "});",
+                  "pm.test('never returns a password', () => pm.expect(body.user).to.not.have.property('password'));",
+                  "pm.collectionVariables.set('admin_token', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"admin\",\"password\":\"password123\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login as regular user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('is not an admin', () => pm.expect(body.user.admin).to.be.false);",
+                  "pm.collectionVariables.set('auth_token', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"user1\",\"password\":\"user123\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Register a new user",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "exec": ["pm.collectionVariables.set('new_user', 'qa_' + Date.now());"] }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('echoes the profile without credentials', () => {",
+                  "  pm.expect(body.login).to.eql(pm.collectionVariables.get('new_user'));",
+                  "  pm.expect(body).to.not.have.property('password');",
+                  "  pm.expect(body).to.have.property('firstName');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"{{new_user}}\",\"firstName\":\"QA\",\"lastName\":\"Bot\",\"password\":\"SecurePassword123\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/register", "host": ["{{base_url}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Register duplicate login (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('reports the clash', () => pm.expect(pm.response.json().message).to.include('already exists'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"{{new_user}}\",\"password\":\"SecurePassword123\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/register", "host": ["{{base_url}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Register short password (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('states the policy', () => pm.expect(pm.response.json().message).to.include('at least 8'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"tooshort\",\"password\":\"short\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/register", "host": ["{{base_url}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Login wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('message is opaque', () => pm.expect(pm.response.json().message).to.eql('Invalid credentials'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"user1\",\"password\":\"definitely-wrong\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login unknown user (401, identical message)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "// A different message here would let an attacker enumerate logins.",
+                  "pm.test('indistinguishable from a wrong password', () => pm.expect(pm.response.json().message).to.eql('Invalid credentials'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"login\":\"no-such-account\",\"password\":\"definitely-wrong\"}" },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Verify token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('reports the claims', () => {",
+                  "  pm.expect(body.valid).to.be.true;",
+                  "  pm.expect(body.login).to.eql('user1');",
+                  "  pm.expect(body.admin).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/verify", "host": ["{{base_url}}"], "path": ["api", "auth", "verify"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Categories",
+      "item": [
+        {
+          "name": "List categories (public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK without a token', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns reference data', () => {",
+                  "  pm.expect(body).to.be.an('array').that.is.not.empty;",
+                  "  pm.expect(body[0]).to.have.all.keys('name', 'profit');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/categories", "host": ["{{base_url}}"], "path": ["resources", "categories"] }
+          }
+        },
+        {
+          "name": "Create category as admin (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('echoes the category', () => pm.expect(pm.response.json().name).to.eql('QaCategory'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{admin_token}}" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"QaCategory\",\"profit\":false}" },
+            "url": { "raw": "{{base_url}}/resources/categories", "host": ["{{base_url}}"], "path": ["resources", "categories"] }
+          }
+        },
+        {
+          "name": "Create duplicate category (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('case-insensitive clash is detected', () => pm.expect(pm.response.json().message).to.include('already exists'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{admin_token}}" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"QACATEGORY\",\"profit\":false}" },
+            "url": { "raw": "{{base_url}}/resources/categories", "host": ["{{base_url}}"], "path": ["resources", "categories"] }
+          }
+        },
+        {
+          "name": "Create category as non-admin (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "pm.test('states the requirement', () => pm.expect(pm.response.json().message).to.include('Admin privileges'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"ShouldNotExist\",\"profit\":false}" },
+            "url": { "raw": "{{base_url}}/resources/categories", "host": ["{{base_url}}"], "path": ["resources", "categories"] }
+          }
+        },
+        {
+          "name": "Delete a referenced category (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 let the FK violation surface as a 500.",
+                  "pm.test('409 Conflict, not 500', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{admin_token}}" }] },
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/resources/categories/Food/false", "host": ["{{base_url}}"], "path": ["resources", "categories", "Food", "false"] }
+          }
+        },
+        {
+          "name": "Delete the QA category (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{admin_token}}" }] },
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/resources/categories/QaCategory/false", "host": ["{{base_url}}"], "path": ["resources", "categories", "QaCategory", "false"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Users",
+      "item": [
+        {
+          "name": "List users as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('no password field leaks', () => body.forEach(u => pm.expect(u).to.not.have.property('password')));",
+                  "pm.test('uses camelCase name fields', () => pm.expect(body[0]).to.have.all.keys('login', 'firstName', 'lastName', 'admin'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{admin_token}}" }] },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/admin", "host": ["{{base_url}}"], "path": ["resources", "users", "admin"] }
+          }
+        },
+        {
+          "name": "List users as non-admin (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('403 Forbidden', () => pm.response.to.have.status(403));"] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1", "host": ["{{base_url}}"], "path": ["resources", "users", "user1"] }
+          }
+        },
+        {
+          "name": "Update own first name (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"firstName\":\"John\"}" },
+            "url": {
+              "raw": "{{base_url}}/resources/users/user1?field=firstName",
+              "host": ["{{base_url}}"],
+              "path": ["resources", "users", "user1"],
+              "query": [{ "key": "field", "value": "firstName" }]
+            }
+          }
+        },
+        {
+          "name": "Update another user (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 had no authorization on this route at all.",
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"firstName\":\"Hacked\"}" },
+            "url": {
+              "raw": "{{base_url}}/resources/users/user2?field=firstName",
+              "host": ["{{base_url}}"],
+              "path": ["resources", "users", "user2"],
+              "query": [{ "key": "field", "value": "firstName" }]
+            }
+          }
+        },
+        {
+          "name": "Escalate to admin via field param (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('admin is not an updatable field', () => pm.expect(pm.response.json().message).to.include('Invalid field'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"admin\":true}" },
+            "url": {
+              "raw": "{{base_url}}/resources/users/user1?field=admin",
+              "host": ["{{base_url}}"],
+              "path": ["resources", "users", "user1"],
+              "query": [{ "key": "field", "value": "admin" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Wallets",
+      "item": [
+        {
+          "name": "Create wallet (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('sets a Location header', () => pm.expect(pm.response.headers.get('Location')).to.include('/wallets/'));",
+                  "const body = pm.response.json();",
+                  "pm.expect(body.amount.currency).to.eql('PLN');",
+                  "pm.collectionVariables.set('wallet_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"QA Wallet\",\"amount\":{\"amount\":\"1000.00\",\"currency\":\"PLN\"}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        },
+        {
+          "name": "Reject an invalid currency code (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Bad\",\"amount\":{\"amount\":\"1.00\",\"currency\":\"PLNX\"}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        },
+        {
+          "name": "List wallets (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('includes the new wallet', () => {",
+                  "  const ids = pm.response.json().map(w => w.id);",
+                  "  pm.expect(ids).to.include(Number(pm.collectionVariables.get('wallet_id')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Expenses",
+      "item": [
+        {
+          "name": "Record an expense (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.expect(body.id).to.be.a('number');",
+                  "pm.collectionVariables.set('expense_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"amount\":{\"amount\":\"50.00\",\"currency\":\"PLN\"},\"date\":\"2024-06-15\",\"description\":\"lunch\",\"category\":{\"name\":\"Food\",\"profit\":false}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/expenses", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "expenses"] }
+          }
+        },
+        {
+          "name": "Balance moved after the expense",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const wallet = pm.response.json().find(w => w.id === Number(pm.collectionVariables.get('wallet_id')));",
+                  "pm.test('1000 - 50 = 950', () => pm.expect(Number(wallet.amount.amount)).to.eql(950));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        },
+        {
+          "name": "Currency mismatch is refused (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 returned 201 and left the balance silently unchanged.",
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('names the mismatch', () => pm.expect(pm.response.json().message).to.include('Currency mismatch'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"amount\":{\"amount\":\"10.00\",\"currency\":\"USD\"},\"date\":\"2024-06-15\",\"description\":\"foreign\",\"category\":{\"name\":\"Food\",\"profit\":false}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/expenses", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "expenses"] }
+          }
+        },
+        {
+          "name": "Wallet summary honours the range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 ignored the date range and returned only the balance.",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('breaks spending down by category', () => {",
+                  "  pm.expect(body.expense_categories).to.have.property('Food');",
+                  "  pm.expect(Number(body.total_expense.amount)).to.eql(50);",
+                  "});",
+                  "pm.test('carries the wallet name and balance', () => {",
+                  "  pm.expect(body.wallet_name).to.eql('QA Wallet');",
+                  "  pm.expect(body).to.have.property('income_categories');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/summary?start=2024-01-01&end=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "summary"],
+              "query": [{ "key": "start", "value": "2024-01-01" }, { "key": "end", "value": "2024-12-31" }]
+            }
+          }
+        },
+        {
+          "name": "Counted categories is a tally",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 always returned {}.",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('counts entries, not amounts', () => pm.expect(body.Food).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/counted_categories?start=2024-01-01&end=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "counted_categories"],
+              "query": [{ "key": "start", "value": "2024-01-01" }, { "key": "end", "value": "2024-12-31" }]
+            }
+          }
+        },
+        {
+          "name": "Highest expense ignores income",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('returns the spending entry', () => pm.expect(Number(pm.response.json().amount.amount)).to.eql(50));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/highest_expense", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "highest_expense"] }
+          }
+        },
+        {
+          "name": "Delete the expense (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets/{{wallet_id}}/expenses/{{expense_id}}", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets", "{{wallet_id}}", "expenses", "{{expense_id}}"] }
+          }
+        },
+        {
+          "name": "Deleting restored the balance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 removed the row but left the balance 50 lower forever.",
+                  "const wallet = pm.response.json().find(w => w.id === Number(pm.collectionVariables.get('wallet_id')));",
+                  "pm.test('back to 1000', () => pm.expect(Number(wallet.amount.amount)).to.eql(1000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Budgets",
+      "item": [
+        {
+          "name": "Create budget (201, persisted)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// v1 returned a fabricated id:1 and wrote nothing.",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('request uses dateRange, response uses date_range', () => pm.expect(body).to.have.property('date_range'));",
+                  "pm.collectionVariables.set('budget_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"category\":{\"name\":\"Food\",\"profit\":false},\"total\":{\"amount\":\"500.00\",\"currency\":\"PLN\"},\"dateRange\":{\"start\":\"2024-01-01\",\"end\":\"2024-12-31\"}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets"] }
+          }
+        },
+        {
+          "name": "List budgets with spent and left",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const created = pm.response.json().find(b => b.id === Number(pm.collectionVariables.get('budget_id')));",
+                  "pm.test('the budget was really persisted', () => pm.expect(created).to.not.be.undefined);",
+                  "pm.test('reports spent and left', () => {",
+                  "  pm.expect(created).to.have.property('spent');",
+                  "  pm.expect(Number(created.left.amount)).to.eql(500 - Number(created.spent.amount));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets"] }
+          }
+        },
+        {
+          "name": "Unknown category (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('names the category', () => pm.expect(pm.response.json().message).to.include('does not exist'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"category\":{\"name\":\"NoSuchCategory\",\"profit\":false},\"total\":{\"amount\":\"1.00\",\"currency\":\"PLN\"},\"dateRange\":{\"start\":\"2024-01-01\",\"end\":\"2024-12-31\"}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets"] }
+          }
+        },
+        {
+          "name": "Inverted date range (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the range', () => pm.expect(pm.response.json().message).to.include('Invalid date range'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"category\":{\"name\":\"Food\",\"profit\":false},\"total\":{\"amount\":\"1.00\",\"currency\":\"PLN\"},\"dateRange\":{\"start\":\"2024-12-31\",\"end\":\"2024-01-01\"}}" },
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets"] }
+          }
+        },
+        {
+          "name": "Delete budget (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets/{{budget_id}}", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets", "{{budget_id}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Security",
+      "description": "The folder that could not exist against v1: its middleware was never wired, so all of these returned 200.",
+      "item": [
+        {
+          "name": "Wallets without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('says why', () => pm.expect(pm.response.json().message).to.include('Authorization'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        },
+        {
+          "name": "Budgets without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"] }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/budgets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "budgets"] }
+          }
+        },
+        {
+          "name": "Forged token is refused (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"] }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImFkbWluIjp0cnVlLCJleHAiOjk5OTk5OTk5OTksImlhdCI6MX0.not-a-real-signature" }] },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "wallets"] }
+          }
+        },
+        {
+          "name": "Another user's wallets (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('403 Forbidden', () => pm.response.to.have.status(403));"] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user2/wallets", "host": ["{{base_url}}"], "path": ["resources", "users", "user2", "wallets"] }
+          }
+        },
+        {
+          "name": "Savings are not exposed (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Savings are modelled and persisted but deliberately unrouted.",
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/resources/users/user1/savings", "host": ["{{base_url}}"], "path": ["resources", "users", "user1", "savings"] }
+          }
+        }
+      ]
+    }
+  ]
+}

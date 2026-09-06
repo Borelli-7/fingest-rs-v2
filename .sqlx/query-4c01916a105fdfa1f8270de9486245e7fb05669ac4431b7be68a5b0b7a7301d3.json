@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, account_login, category_name, category_profit,\n                      total_amount, total_currency, start_date, end_date\n               FROM budget WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "account_login",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "category_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "category_profit",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_amount",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 5,
+        "name": "total_currency",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "start_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 7,
+        "name": "end_date",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4c01916a105fdfa1f8270de9486245e7fb05669ac4431b7be68a5b0b7a7301d3"
+}

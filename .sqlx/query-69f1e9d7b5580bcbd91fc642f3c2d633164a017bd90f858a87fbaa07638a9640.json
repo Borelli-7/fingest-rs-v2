@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE account SET first_name = $1 WHERE login = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "69f1e9d7b5580bcbd91fc642f3c2d633164a017bd90f858a87fbaa07638a9640"
+}

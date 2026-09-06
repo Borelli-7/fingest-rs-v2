@@ -1,0 +1,24 @@
+[package]
+name = "fingest-identity-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Identity bounded context: accounts, credentials, tokens. No I/O."
+
+# Dependency rule: interior of the hexagon. No sqlx, actix, tokio, jsonwebtoken, bcrypt.
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[features]
+test-support = []
+
+[dev-dependencies]
+futures-executor = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

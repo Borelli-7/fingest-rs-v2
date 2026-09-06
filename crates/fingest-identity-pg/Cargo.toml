@@ -1,0 +1,19 @@
+[package]
+name = "fingest-identity-pg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Postgres adapter for the identity context."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-identity-core = { path = "../fingest-identity-core" }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

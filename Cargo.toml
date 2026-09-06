@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "bins/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT"
+repository = "https://github.com/Borelli-7/fingest-rs-v2"
+
+[workspace.dependencies]
+# --- kernel-safe (pure) ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+bigdecimal = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+async-trait = "0.1"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+# Minimal executor for core-crate tests, so the hexagon interior never needs tokio.
+futures-executor = "0.3"
+
+# --- adapter-only: MUST NOT appear in any *-core or kernel crate ---
+actix-web = "4.9"
+actix-cors = "0.7"
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "bigdecimal",
+    "chrono",
+    "macros",
+    "migrate",
+    "json",
+] }
+tokio = { version = "1.48", features = ["full"] }
+jsonwebtoken = "9.3"
+bcrypt = "0.16"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

@@ -1,0 +1,18 @@
+[package]
+name = "fingest-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frozen HTTP wire contracts. Field names and shapes here are the public API."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+serde = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO budget\n               (account_login, category_name, category_profit,\n                total_amount, total_currency, start_date, end_date)\n               VALUES ($1, $2, $3, $4, $5, $6, $7)\n               RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Bool",
+        "Numeric",
+        "Varchar",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1ffc3d0099cbb5287e9bf78159a5a330c36596cd23ee61035bd61abe6553c62e"
+}

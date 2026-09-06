@@ -1,0 +1,8 @@
+target/
+.git/
+.github/
+.env
+*.jtl
+report/
+Dockerfile
+docker-compose.yml
