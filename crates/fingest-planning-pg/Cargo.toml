@@ -1,0 +1,21 @@
+[package]
+name = "fingest-planning-pg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Postgres adapter for the planning context."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-planning-core = { path = "../fingest-planning-core" }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "fingest-bootstrap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Composition root: the only place that names concrete adapters."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-http = { path = "../fingest-http" }
+fingest-catalog-core = { path = "../fingest-catalog-core" }
+fingest-catalog-pg = { path = "../fingest-catalog-pg" }
+fingest-identity-core = { path = "../fingest-identity-core" }
+fingest-identity-pg = { path = "../fingest-identity-pg" }
+fingest-wallets-core = { path = "../fingest-wallets-core" }
+fingest-wallets-pg = { path = "../fingest-wallets-pg" }
+fingest-planning-core = { path = "../fingest-planning-core" }
+fingest-planning-pg = { path = "../fingest-planning-pg" }
+fingest-auth-jwt = { path = "../fingest-auth-jwt" }
+fingest-events = { path = "../fingest-events" }
+fingest-plugins = { path = "../fingest-plugins" }
+tokio = { workspace = true }
+actix-web = { workspace = true }
+actix-cors = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

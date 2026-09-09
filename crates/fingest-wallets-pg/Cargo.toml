@@ -1,0 +1,21 @@
+[package]
+name = "fingest-wallets-pg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Postgres adapter for the wallets context, including the transactional unit of work."
+
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+fingest-wallets-core = { path = "../fingest-wallets-core" }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

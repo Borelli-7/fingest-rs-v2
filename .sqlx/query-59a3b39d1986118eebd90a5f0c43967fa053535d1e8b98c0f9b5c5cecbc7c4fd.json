@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO budget\n               (account_login, category_name, category_profit, total_amount, total_currency,\n                start_date, end_date)\n               VALUES ('user1', 'Food', false, 100.00, 'USD', DATE '2024-01-01', DATE '2024-12-31')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "59a3b39d1986118eebd90a5f0c43967fa053535d1e8b98c0f9b5c5cecbc7c4fd"
+}

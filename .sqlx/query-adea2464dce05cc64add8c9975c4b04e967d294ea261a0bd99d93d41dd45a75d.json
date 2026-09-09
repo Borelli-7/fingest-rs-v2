@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO saving\n               (account_login, name, goal_amount, goal_currency,\n                current_amount, current_currency, start_date, end_date)\n               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n               RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Numeric",
+        "Varchar",
+        "Numeric",
+        "Varchar",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "adea2464dce05cc64add8c9975c4b04e967d294ea261a0bd99d93d41dd45a75d"
+}

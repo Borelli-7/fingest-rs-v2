@@ -1,0 +1,24 @@
+[package]
+name = "fingest-catalog-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Catalog bounded context: the Category aggregate, its ports and use cases. No I/O."
+
+# Dependency rule: interior of the hexagon. No sqlx, actix, tokio.
+[dependencies]
+fingest-kernel = { path = "../fingest-kernel" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[features]
+# Exposes the in-memory port doubles to downstream crates' tests.
+test-support = []
+
+[dev-dependencies]
+futures-executor = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: moneymanager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d moneymanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/moneymanager
+      # No default: the process refuses to start with a secret under 32 characters.
+      JWT_SECRET: ${JWT_SECRET:?generate one with `openssl rand -base64 32`}
+      JWT_EXPIRATION_HOURS: 24
+      RUST_LOG: info
+      PLUGINS: tracing
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:
