@@ -36,6 +36,9 @@ The dependency rule — no `*-core` crate may reference `sqlx`, `actix-web` or `
 as a dev-dependency — is enforced by a test, not a convention:
 `crates/fingest-kernel/tests/dependency_rule.rs`.
 
+[docs/architecture.md](docs/architecture.md) covers the same ground as C4 context, container
+and per-context component diagrams, with the patterns catalogue and the runtime views.
+
 ## Endpoints
 
 25 routes. v1's README documented 16 and listed `/resources/users` where the code registered
@@ -187,6 +190,9 @@ polls every 5 seconds and hands batches to the configured publishers.
 Delivery is **at-least-once** — rows are marked published only after a successful publish, so a
 broker outage leaves them pending rather than dropping them. Subscribers must be idempotent.
 
+The drain cycle, including its failure path, is diagrammed in
+[docs/architecture.md](docs/architecture.md#one-outbox-drain-cycle).
+
 ## Docker
 
 ```bash
@@ -197,6 +203,13 @@ docker compose up
 The image is ~102 MB, runs as uid 10001, and contains no `.env` — v1 copied `sample.env` to
 `/app/.env`, shipping a publicly known `JWT_SECRET` inside every image. `docker-compose.yml`
 requires `POSTGRES_PASSWORD` and `JWT_SECRET` to be supplied.
+
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | C4 context, container and component views; architecture patterns and where each one is enforced |
+| [docs/adr/](docs/adr/) | Decision records — why hexagonal, why the dependency rule is a test, why the outbox, why compile-time plugins |
 
 ## License
 
