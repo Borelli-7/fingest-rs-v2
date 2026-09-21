@@ -30,6 +30,21 @@ pub struct CategoryDto {
     pub name: String,
     pub profit: bool,
 }
+/// What the running binary was started with. New in v2, so nothing here is frozen by v1.
+///
+/// `available` is what is compiled in, `enabled` is what `PLUGINS` selected, and
+/// `capabilities` is what the enabled plugins declare for clients to gate features on.
+/// All three default to empty so an older server, or one answering 404, is indistinguishable
+/// from one with nothing enabled — clients fail closed either way.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilitiesDto {
+    #[serde(default)]
+    pub enabled: Vec<String>,
+    #[serde(default)]
+    pub available: Vec<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateCategoryRequest {
@@ -197,6 +212,28 @@ mod tests {
         let parsed: UpdateCategoryRequest =
             serde_json::from_str(r#"{"new_name":"Groceries"}"#).unwrap();
         assert_eq!(parsed.new_name, "Groceries");
+    }
+
+    #[test]
+    fn capabilities_body_has_three_list_fields() {
+        let json = serde_json::to_value(CapabilitiesDto {
+            enabled: vec!["tracing".into()],
+            available: vec!["tracing".into(), "in-process".into()],
+            capabilities: vec![],
+        })
+        .unwrap();
+
+        assert_eq!(json["enabled"][0], "tracing");
+        assert_eq!(json["available"][1], "in-process");
+        assert!(json["capabilities"].as_array().unwrap().is_empty());
+        assert_eq!(json.as_object().unwrap().len(), 3);
+    }
+
+    /// A client must be able to parse a body from a server that predates any of these keys.
+    #[test]
+    fn capabilities_tolerates_missing_fields() {
+        let parsed: CapabilitiesDto = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed, CapabilitiesDto::default());
     }
 
     #[test]

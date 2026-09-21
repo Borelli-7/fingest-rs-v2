@@ -14,7 +14,7 @@ use fingest_auth_jwt::{BcryptHasher, JwtTokens};
 use fingest_catalog_core::{CategoryRepository, CategoryService};
 use fingest_catalog_pg::PgCategoryRepository;
 use fingest_events::{InProcessPublisher, OutboxRelay, PgOutboxReader, TracingPublisher};
-use fingest_http::TokenVerifierRef;
+use fingest_http::{CapabilityReport, TokenVerifierRef};
 use fingest_identity_core::{
     AccountRepository, AuthService, PasswordHasher, TokenIssuer, TokenVerifier, UserService,
 };
@@ -63,10 +63,15 @@ pub struct Dependencies {
     wallet_service: web::Data<WalletService>,
     budget_service: web::Data<BudgetService>,
     token_verifier: web::Data<TokenVerifierRef>,
+    capabilities: web::Data<CapabilityReport>,
 }
 
 impl Dependencies {
-    pub fn build(pool: PgPool, config: &Config) -> Result<Self, BootstrapError> {
+    pub fn build(
+        pool: PgPool,
+        config: &Config,
+        capabilities: CapabilityReport,
+    ) -> Result<Self, BootstrapError> {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let clock_for_wallets = Arc::clone(&clock);
 
@@ -103,6 +108,7 @@ impl Dependencies {
             )),
             budget_service: web::Data::new(BudgetService::new(budgets, clock_for_wallets)),
             token_verifier: web::Data::new(TokenVerifierRef(verifier)),
+            capabilities: web::Data::new(capabilities),
         })
     }
 
@@ -113,6 +119,7 @@ impl Dependencies {
             .app_data(self.wallet_service.clone())
             .app_data(self.budget_service.clone())
             .app_data(self.token_verifier.clone())
+            .app_data(self.capabilities.clone())
             .app_data(fingest_http::json_config_plain());
         fingest_http::configure_routes(cfg, Arc::clone(&self.token_verifier.0));
     }
@@ -175,13 +182,30 @@ fn plugin_host() -> Result<PluginHost, BootstrapError> {
     Ok(host)
 }
 
+/// Activates the configured plugins, yielding the publisher and what clients may ask about.
+fn wire_plugins(
+    config: &Config,
+) -> Result<(Arc<dyn EventPublisher>, CapabilityReport), BootstrapError> {
+    let host = plugin_host()?;
+    let available = host.available().into_iter().map(str::to_owned).collect();
+    let registry = host.build(&config.plugins)?;
+
+    let report = CapabilityReport {
+        enabled: config.plugins.clone(),
+        available,
+        capabilities: registry.capabilities().to_vec(),
+    };
+
+    Ok((registry.into_publisher(), report))
+}
+
 pub async fn run(config: Config) -> Result<(), BootstrapError> {
     let pool = connect(&config).await?;
 
-    let publisher = plugin_host()?.build(&config.plugins)?.into_publisher();
+    let (publisher, capabilities) = wire_plugins(&config)?;
     spawn_outbox_relay(pool.clone(), publisher);
 
-    let dependencies = Dependencies::build(pool, &config)?;
+    let dependencies = Dependencies::build(pool, &config, capabilities)?;
     let allowed_origin = config.cors_allowed_origin.clone();
 
     tracing::info!(host = %config.host, port = config.port, "starting server");
@@ -204,4 +228,56 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(plugins: &str) -> Config {
+        Config::from_source(|key| match key {
+            "DATABASE_URL" => Some("postgres://localhost/db".to_owned()),
+            "JWT_SECRET" => Some("0123456789abcdef0123456789abcdef".to_owned()),
+            "PLUGINS" => Some(plugins.to_owned()),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_report_separates_what_is_compiled_in_from_what_is_on() {
+        let (_, report) = wire_plugins(&config("tracing")).unwrap();
+
+        assert_eq!(report.enabled, ["tracing"]);
+        assert_eq!(report.available, ["tracing", "in-process"]);
+    }
+
+    /// Neither shipped plugin is a user-facing feature, so a default build advertises none.
+    #[test]
+    fn publisher_only_plugins_advertise_no_capabilities() {
+        let (_, report) = wire_plugins(&config("tracing,in-process")).unwrap();
+
+        assert_eq!(report.enabled, ["tracing", "in-process"]);
+        assert!(report.capabilities.is_empty());
+    }
+
+    #[test]
+    fn disabling_publishing_still_reports_what_is_available() {
+        let (_, report) = wire_plugins(&config("")).unwrap();
+
+        assert!(report.enabled.is_empty());
+        assert_eq!(report.available, ["tracing", "in-process"]);
+    }
+
+    #[test]
+    fn a_typo_in_plugins_refuses_to_start_rather_than_silently_disabling() {
+        let Err(err) = wire_plugins(&config("tracing,tracnig")) else {
+            panic!("an unknown plugin name must not start the process");
+        };
+
+        assert!(matches!(
+            err,
+            BootstrapError::Plugin(PluginError::Unknown(_))
+        ));
+    }
 }

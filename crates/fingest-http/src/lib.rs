@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod budgets;
+pub mod capabilities;
 pub mod catalog;
 pub mod error;
 pub mod extractor;
@@ -15,6 +16,7 @@ pub mod users;
 pub mod wallets;
 
 pub use auth::auth_routes;
+pub use capabilities::{CapabilityReport, capability_routes};
 pub use catalog::category_routes;
 pub use error::ApiError;
 pub use extractor::{AuthenticatedUser, TokenVerifierRef};
@@ -28,6 +30,7 @@ pub fn configure_routes(
     verifier: std::sync::Arc<dyn fingest_identity_core::TokenVerifier>,
 ) {
     auth_routes(cfg);
+    capability_routes(cfg);
     category_routes(cfg);
     user_routes(cfg, verifier);
 }

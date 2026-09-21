@@ -41,7 +41,7 @@ and per-context component diagrams, with the patterns catalogue and the runtime 
 
 ## Endpoints
 
-25 routes. v1's README documented 16 and listed `/resources/users` where the code registered
+26 routes. v1's README documented 16 and listed `/resources/users` where the code registered
 `/resources/users/{login}`.
 
 `self-or-admin` means the caller's token subject must match `{login}`, or the caller is an admin.
@@ -52,6 +52,15 @@ and per-context component diagrams, with the patterns catalogue and the runtime 
 | POST | `/api/auth/register` | public |
 | POST | `/api/auth/login` | public |
 | GET | `/api/auth/verify` | any valid token |
+
+### Capabilities
+| Method | Path | Access |
+|---|---|---|
+| GET | `/api/capabilities` | public |
+
+Reports `available` (compiled in), `enabled` (selected by `PLUGINS`) and `capabilities`
+(feature names the enabled plugins declare). Public because a client needs it before it has
+a token. It exposes build configuration, never data.
 
 ### Categories
 | Method | Path | Access |
@@ -118,6 +127,7 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D11 | duplicate / in-use category | 500 | 409 |
 | D12 | `JWT_SECRET` under 32 chars | accepted | process refuses to start |
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
+| D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
 
 Two further fixes change no status code and so have no D-number:
 
