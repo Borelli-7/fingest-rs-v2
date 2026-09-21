@@ -45,11 +45,28 @@ fn pure_crate_manifests() -> Vec<PathBuf> {
     manifests
 }
 
-/// Strips comments so a crate name mentioned in a `#` note does not trip the check.
+/// Extracts every dependency name a manifest declares.
+///
+/// Handles both spellings, because they are equivalent to cargo and a rule that only sees
+/// one can be walked around by accident:
+///   `sqlx = "0.8"` and `[dependencies.sqlx]`
+///
+/// Comments are stripped first, so a crate mentioned in a `#` note does not trip the check.
 fn declared_dependency_lines(manifest: &str) -> Vec<String> {
     manifest
         .lines()
         .map(|line| line.split('#').next().unwrap_or_default().trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .map(
+            |line| match line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                // `[dependencies.x]`, `[dev-dependencies.x]`, `[target.'cfg(..)'.dependencies.x]`
+                Some(section) => section
+                    .rsplit_once("dependencies.")
+                    .map(|(_, name)| name.trim().to_owned())
+                    .unwrap_or_default(),
+                None => line,
+            },
+        )
         .filter(|line| !line.is_empty())
         .collect()
 }
@@ -103,4 +120,28 @@ fn kernel_is_among_the_checked_crates() {
 fn comment_mentions_do_not_trigger_a_violation() {
     let lines = declared_dependency_lines("# sqlx is banned here\nserde = \"1\"\n");
     assert_eq!(lines, vec!["serde = \"1\""]);
+}
+
+/// `[dependencies.sqlx]` means the same thing to cargo as `sqlx = "0.8"`, so it must mean
+/// the same thing here. Before this, the table spelling slipped past the scan entirely.
+#[test]
+fn a_dependency_declared_as_its_own_table_is_still_seen() {
+    let lines = declared_dependency_lines("[dependencies.sqlx]\nversion = \"0.8\"\n");
+
+    assert!(lines.contains(&"sqlx".to_owned()), "got {lines:?}");
+}
+
+#[test]
+fn a_target_specific_dependency_table_is_still_seen() {
+    let lines =
+        declared_dependency_lines("[target.'cfg(unix)'.dev-dependencies.tokio]\nversion = \"1\"\n");
+
+    assert!(lines.contains(&"tokio".to_owned()), "got {lines:?}");
+}
+
+#[test]
+fn an_ordinary_section_header_is_not_a_dependency() {
+    let lines = declared_dependency_lines("[package]\n[dependencies]\n[lints]\n");
+
+    assert!(lines.is_empty(), "got {lines:?}");
 }

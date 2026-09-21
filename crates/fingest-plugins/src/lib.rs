@@ -25,6 +25,15 @@ pub enum PluginError {
 pub trait Plugin: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Feature names this plugin unlocks for clients.
+    ///
+    /// Declared rather than discovered, so the set is knowable without running
+    /// [`Plugin::register`]. A plugin that only contributes a publisher has none: a
+    /// logging backend is not a user-facing feature.
+    fn capabilities(&self) -> &[&'static str] {
+        &[]
+    }
+
     fn register(&self, registry: &mut Registry);
 }
 
@@ -32,6 +41,7 @@ pub trait Plugin: Send + Sync {
 #[derive(Default)]
 pub struct Registry {
     publishers: Vec<Arc<dyn EventPublisher>>,
+    capabilities: Vec<String>,
 }
 
 impl Registry {
@@ -41,6 +51,17 @@ impl Registry {
 
     pub fn publisher_count(&self) -> usize {
         self.publishers.len()
+    }
+
+    /// Every capability declared by the enabled plugins, in activation order, deduplicated.
+    pub fn capabilities(&self) -> &[String] {
+        &self.capabilities
+    }
+
+    fn add_capability(&mut self, capability: &str) {
+        if !self.capabilities.iter().any(|c| c == capability) {
+            self.capabilities.push(capability.to_owned());
+        }
     }
 
     /// Collapses the contributions into one publisher.
@@ -56,6 +77,7 @@ impl std::fmt::Debug for Registry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Registry")
             .field("publishers", &self.publishers.len())
+            .field("capabilities", &self.capabilities)
             .finish()
     }
 }
@@ -114,6 +136,9 @@ impl PluginHost {
                 .ok_or_else(|| PluginError::Unknown(name.clone()))?;
 
             plugin.register(&mut registry);
+            for capability in plugin.capabilities() {
+                registry.add_capability(capability);
+            }
             tracing::info!(plugin = plugin.name(), "plugin enabled");
         }
 
@@ -170,6 +195,18 @@ mod tests {
         }
     }
 
+    struct CapablePlugin(&'static str, &'static [&'static str]);
+
+    impl Plugin for CapablePlugin {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn capabilities(&self) -> &[&'static str] {
+            self.1
+        }
+        fn register(&self, _: &mut Registry) {}
+    }
+
     fn envelope() -> EventEnvelope {
         EventEnvelope::new(
             &fingest_kernel::DomainEvent::AccountRegistered {
@@ -219,6 +256,43 @@ mod tests {
 
         assert_eq!(registry.publisher_count(), 1);
         assert_eq!(host.available(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn a_publisher_only_plugin_declares_no_capabilities() {
+        let mut host = PluginHost::new();
+        host.register(Box::new(CountingPlugin("a", Arc::default())))
+            .unwrap();
+
+        let registry = host.build(&["a".to_owned()]).unwrap();
+
+        assert!(registry.capabilities().is_empty());
+    }
+
+    #[test]
+    fn only_enabled_plugins_contribute_capabilities() {
+        let mut host = PluginHost::new();
+        host.register(Box::new(CapablePlugin("a", &["budget-forecast"])))
+            .unwrap();
+        host.register(Box::new(CapablePlugin("b", &["audit-trail"])))
+            .unwrap();
+
+        let registry = host.build(&["a".to_owned()]).unwrap();
+
+        assert_eq!(registry.capabilities(), ["budget-forecast"]);
+    }
+
+    #[test]
+    fn capabilities_keep_activation_order_and_deduplicate() {
+        let mut host = PluginHost::new();
+        host.register(Box::new(CapablePlugin("a", &["shared", "only-a"])))
+            .unwrap();
+        host.register(Box::new(CapablePlugin("b", &["shared", "only-b"])))
+            .unwrap();
+
+        let registry = host.build(&["a".to_owned(), "b".to_owned()]).unwrap();
+
+        assert_eq!(registry.capabilities(), ["shared", "only-a", "only-b"]);
     }
 
     #[tokio::test]

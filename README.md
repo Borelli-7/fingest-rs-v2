@@ -36,9 +36,12 @@ The dependency rule — no `*-core` crate may reference `sqlx`, `actix-web` or `
 as a dev-dependency — is enforced by a test, not a convention:
 `crates/fingest-kernel/tests/dependency_rule.rs`.
 
+[docs/architecture.md](docs/architecture.md) covers the same ground as C4 context, container
+and per-context component diagrams, with the patterns catalogue and the runtime views.
+
 ## Endpoints
 
-25 routes. v1's README documented 16 and listed `/resources/users` where the code registered
+26 routes. v1's README documented 16 and listed `/resources/users` where the code registered
 `/resources/users/{login}`.
 
 `self-or-admin` means the caller's token subject must match `{login}`, or the caller is an admin.
@@ -49,6 +52,15 @@ as a dev-dependency — is enforced by a test, not a convention:
 | POST | `/api/auth/register` | public |
 | POST | `/api/auth/login` | public |
 | GET | `/api/auth/verify` | any valid token |
+
+### Capabilities
+| Method | Path | Access |
+|---|---|---|
+| GET | `/api/capabilities` | public |
+
+Reports `available` (compiled in), `enabled` (selected by `PLUGINS`) and `capabilities`
+(feature names the enabled plugins declare). Public because a client needs it before it has
+a token. It exposes build configuration, never data.
 
 ### Categories
 | Method | Path | Access |
@@ -115,6 +127,7 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D11 | duplicate / in-use category | 500 | 409 |
 | D12 | `JWT_SECRET` under 32 chars | accepted | process refuses to start |
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
+| D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
 
 Two further fixes change no status code and so have no D-number:
 
@@ -187,6 +200,9 @@ polls every 5 seconds and hands batches to the configured publishers.
 Delivery is **at-least-once** — rows are marked published only after a successful publish, so a
 broker outage leaves them pending rather than dropping them. Subscribers must be idempotent.
 
+The drain cycle, including its failure path, is diagrammed in
+[docs/architecture.md](docs/architecture.md#one-outbox-drain-cycle).
+
 ## Docker
 
 ```bash
@@ -197,6 +213,13 @@ docker compose up
 The image is ~102 MB, runs as uid 10001, and contains no `.env` — v1 copied `sample.env` to
 `/app/.env`, shipping a publicly known `JWT_SECRET` inside every image. `docker-compose.yml`
 requires `POSTGRES_PASSWORD` and `JWT_SECRET` to be supplied.
+
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | C4 context, container and component views; architecture patterns and where each one is enforced |
+| [docs/adr/](docs/adr/) | Decision records — why hexagonal, why the dependency rule is a test, why the outbox, why compile-time plugins |
 
 ## License
 
