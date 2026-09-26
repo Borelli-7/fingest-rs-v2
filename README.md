@@ -128,6 +128,7 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D12 | `JWT_SECRET` under 32 chars | accepted | process refuses to start |
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
 | D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
+| D16 | `PUT .../wallets/{id}` with a different `amount.currency` | accepted, existing entries orphaned | 400 `CurrencyMismatch`; amount changes are recorded as `WalletBalanceAdjusted` |
 
 Two further fixes change no status code and so have no D-number:
 

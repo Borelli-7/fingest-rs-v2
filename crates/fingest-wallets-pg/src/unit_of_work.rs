@@ -90,15 +90,11 @@ impl WalletTx for PgWalletTx {
         Ok(id)
     }
 
-    async fn update_wallet(&mut self, updated: &Wallet) -> Result<u64, PortError> {
+    async fn rename_wallet(&mut self, wallet_id: i32, name: &str) -> Result<u64, PortError> {
         sqlx::query!(
-            r#"UPDATE wallet
-               SET name = $1, amount_amount = $2, amount_currency = $3
-               WHERE id = $4"#,
-            updated.name,
-            updated.amount.amount,
-            updated.amount.currency.as_str(),
-            updated.id
+            r#"UPDATE wallet SET name = $1 WHERE id = $2"#,
+            name,
+            wallet_id
         )
         .execute(&mut *self.tx)
         .await
