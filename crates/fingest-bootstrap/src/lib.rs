@@ -127,7 +127,9 @@ impl Dependencies {
             .app_data(self.token_verifier.clone())
             .app_data(self.capabilities.clone())
             .app_data(self.auth_rate_limiter.clone())
-            .app_data(fingest_http::json_config_plain());
+            .app_data(fingest_http::json_config_plain())
+            .app_data(fingest_http::path_config())
+            .app_data(fingest_http::query_config());
         fingest_http::configure_routes(cfg, Arc::clone(&self.token_verifier.0));
     }
 }

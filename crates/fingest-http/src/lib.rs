@@ -21,7 +21,7 @@ pub use capabilities::{CapabilityReport, capability_routes};
 pub use catalog::category_routes;
 pub use error::ApiError;
 pub use extractor::{AuthenticatedUser, TokenVerifierRef};
-pub use json_config::{json_config_money, json_config_plain};
+pub use json_config::{json_config_money, json_config_plain, path_config, query_config};
 pub use middleware::JwtAuth;
 pub use rate_limit::RateLimiter;
 pub use resources::user_routes;
