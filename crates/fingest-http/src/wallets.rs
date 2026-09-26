@@ -280,7 +280,7 @@ mod tests {
     use chrono::NaiveDate;
     use fingest_identity_core::{
         TokenVerifier, UserService,
-        testing::{FakeTokens, InMemoryAccountRepository},
+        testing::{FakeTokens, InMemoryAccountRepository, auth_service, fixed_clock},
     };
     use fingest_kernel::{CategoryRef, Currency, Money, SystemClock};
     use fingest_wallets_core::{
@@ -334,12 +334,20 @@ mod tests {
             Arc::new(InMemoryUnitOfWork::new(store)) as Arc<dyn UnitOfWork>,
             Arc::new(SystemClock),
         );
+        // The extractor re-checks every token against the stored account.
+        let accounts = Arc::new(InMemoryAccountRepository::with_accounts(&[
+            ("bob", false),
+            ("mallory", false),
+            ("root", true),
+        ]));
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(service))
-                .app_data(web::Data::new(UserService::new(Arc::new(
-                    InMemoryAccountRepository::new(),
-                ))))
+                .app_data(web::Data::new(UserService::new(
+                    accounts.clone(),
+                    fixed_clock(),
+                )))
+                .app_data(web::Data::new(auth_service(accounts)))
                 .app_data(json_config_plain())
                 .configure(|cfg| user_routes(cfg, verifier)),
         )

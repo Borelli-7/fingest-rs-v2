@@ -132,7 +132,10 @@ mod tests {
     use crate::resources::user_routes;
     use actix_web::{App, http::StatusCode, test};
     use chrono::NaiveDate;
-    use fingest_identity_core::{TokenVerifier, testing::FakeTokens};
+    use fingest_identity_core::{
+        TokenVerifier,
+        testing::{FakeTokens, InMemoryAccountRepository, auth_service},
+    };
     use fingest_kernel::{CategoryRef, Money, SystemClock};
     use fingest_planning_core::testing::InMemoryBudgetRepository;
     use serde_json::{Value, json};
@@ -175,6 +178,13 @@ mod tests {
         let verifier: Arc<dyn TokenVerifier> = Arc::new(FakeTokens);
         let app = test::init_service(
             App::new()
+                .app_data(web::Data::new(auth_service(Arc::new(
+                    InMemoryAccountRepository::with_accounts(&[
+                        ("bob", false),
+                        ("mallory", false),
+                        ("root", true),
+                    ]),
+                ))))
                 .app_data(web::Data::new(BudgetService::new(
                     repo,
                     Arc::new(SystemClock),
