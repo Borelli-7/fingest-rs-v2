@@ -89,7 +89,8 @@ impl BudgetRepository for PgBudgetRepository {
     }
 
     /// Spending is summed across every wallet the owner holds, restricted to the budget's
-    /// own period and to non-income entries.
+    /// own period, its currency and non-income entries. There is no FX conversion, so an
+    /// entry in another currency cannot count towards the budget.
     async fn list_with_spent(
         &self,
         login: &str,
@@ -102,6 +103,7 @@ impl BudgetRepository for PgBudgetRepository {
                    b.total_amount, b.total_currency, b.start_date, b.end_date,
                    COALESCE(SUM(
                        CASE WHEN e.category_profit = false
+                             AND e.amount_currency = b.total_currency
                              AND e.date BETWEEN b.start_date AND b.end_date
                             THEN e.amount_amount ELSE 0 END
                    ), 0) AS "spent_amount!"
@@ -435,6 +437,53 @@ mod tests {
         let found = listed.iter().find(|b| b.budget.id == Some(id)).unwrap();
         assert_eq!(found.spent, pln(120));
         assert_eq!(found.left().unwrap(), pln(380));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn spending_in_another_currency_does_not_count(pool: PgPool) {
+        let repo = PgBudgetRepository::new(pool.clone());
+        let id = repo
+            .insert(OWNER, &a_budget(500), Utc::now())
+            .await
+            .unwrap();
+
+        sqlx::query!(
+            r#"INSERT INTO wallet (id, name, amount_amount, amount_currency) VALUES
+               (9200, 'Zloty', 1000.00, 'PLN'),
+               (9201, 'Dollars', 1000.00, 'USD')"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            r#"INSERT INTO account_wallet (account_login, wallet_id) VALUES ($1, 9200), ($1, 9201)"#,
+            OWNER
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            r#"INSERT INTO expense
+               (wallet_id, amount_amount, amount_currency, date, description,
+                category_name, category_profit)
+               VALUES (9200, 40.00, 'PLN', DATE '2024-06-15', 'lunch', 'Food', false),
+                      (9201, 100.00, 'USD', DATE '2024-06-15', 'dinner', 'Food', false)"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let listed = repo
+            .list_with_spent(OWNER, &any_window(), &any_window())
+            .await
+            .unwrap();
+
+        let found = listed.iter().find(|b| b.budget.id == Some(id)).unwrap();
+        assert_eq!(
+            found.spent,
+            pln(40),
+            "the USD entry must not be added as PLN"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
