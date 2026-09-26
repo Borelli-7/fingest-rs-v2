@@ -7,12 +7,13 @@ use crate::{
     port::{AccountRepository, PasswordHasher, TokenIssuer, TokenVerifier},
 };
 
+/// Self-registration input. Carries no privilege flag: a public route must never be able
+/// to create an administrator.
 pub struct NewAccount {
     pub login: String,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub password: String,
-    pub admin: bool,
 }
 
 pub struct AuthService {
@@ -43,7 +44,7 @@ impl AuthService {
             new_account.login,
             new_account.first_name,
             new_account.last_name,
-            new_account.admin,
+            false,
         )?;
         let password = Password::new(new_account.password)?;
 
@@ -51,7 +52,7 @@ impl AuthService {
             return Err(IdentityError::already_exists(&account.login));
         }
 
-        let hash = self.hasher.hash(&password)?;
+        let hash = self.hasher.hash(&password).await?;
         Ok(self.accounts.insert(&account, &hash).await?)
     }
 
@@ -78,18 +79,18 @@ impl AuthService {
             password_hash,
         }) = self.accounts.find(login).await?
         else {
-            self.hasher.verify_dummy(password)?;
+            self.hasher.verify_dummy(password).await?;
             return Err(IdentityError::invalid_credentials());
         };
 
         let Some(hash) = password_hash else {
-            self.hasher.verify_dummy(password)?;
+            self.hasher.verify_dummy(password).await?;
             return Err(IdentityError::Unauthenticated(
                 "User has no password set".to_owned(),
             ));
         };
 
-        if !self.hasher.verify(password, &hash)? {
+        if !self.hasher.verify(password, &hash).await? {
             return Err(IdentityError::invalid_credentials());
         }
 
@@ -101,6 +102,20 @@ impl AuthService {
         self.verifier
             .verify(token)
             .map_err(|e| IdentityError::Unauthenticated(e.to_string()))
+    }
+
+    /// A token outlives the account state it was minted from. Re-reads the account so a
+    /// deleted user is rejected and a demoted admin loses admin rights immediately, rather
+    /// than when the token expires.
+    pub async fn current_principal(&self, mut claims: Claims) -> Result<Claims, IdentityError> {
+        let Some(stored) = self.accounts.find(&claims.sub).await? else {
+            return Err(IdentityError::Unauthenticated(
+                "Account no longer exists".to_owned(),
+            ));
+        };
+
+        claims.admin = stored.account.admin;
+        Ok(claims)
     }
 }
 
@@ -121,7 +136,6 @@ mod tests {
             first_name: None,
             last_name: None,
             password: password.to_owned(),
-            admin: false,
         }
     }
 
@@ -136,6 +150,17 @@ mod tests {
         let hash = stored.password_hash.unwrap();
         assert_ne!(hash, "correct-horse");
         assert!(hash.starts_with("hashed:"));
+    }
+
+    #[test]
+    fn registration_never_creates_an_admin() {
+        let repo = Arc::new(InMemoryAccountRepository::new());
+        let svc = service(repo.clone(), Arc::new(CountingHasher::new()));
+
+        let created = block_on(svc.register(new_account("bob", "correct-horse"))).unwrap();
+
+        assert!(!created.admin);
+        assert!(!block_on(repo.find("bob")).unwrap().unwrap().account.admin);
     }
 
     #[test]
@@ -240,6 +265,45 @@ mod tests {
             err,
             IdentityError::Unauthenticated("User has no password set".to_owned())
         );
+    }
+
+    fn claims_for(login: &str, admin: bool) -> Claims {
+        Claims {
+            sub: login.to_owned(),
+            admin,
+            exp: 0,
+            iat: 0,
+        }
+    }
+
+    #[test]
+    fn a_token_for_a_deleted_account_is_rejected() {
+        let svc = service(
+            Arc::new(InMemoryAccountRepository::new()),
+            Arc::new(CountingHasher::new()),
+        );
+
+        let err = block_on(svc.current_principal(claims_for("ghost", true))).unwrap_err();
+
+        assert_eq!(
+            err,
+            IdentityError::Unauthenticated("Account no longer exists".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_stale_admin_claim_is_replaced_by_the_stored_flag() {
+        let repo = Arc::new(InMemoryAccountRepository::new());
+        let svc = service(repo.clone(), Arc::new(CountingHasher::new()));
+        block_on(svc.register(new_account("bob", "correct-horse"))).unwrap();
+
+        let principal = block_on(svc.current_principal(claims_for("bob", true))).unwrap();
+
+        assert!(
+            !principal.admin,
+            "a demoted admin must not keep admin rights"
+        );
+        assert_eq!(principal.sub, "bob");
     }
 
     #[test]

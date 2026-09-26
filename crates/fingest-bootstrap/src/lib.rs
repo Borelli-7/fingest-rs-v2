@@ -14,7 +14,7 @@ use fingest_auth_jwt::{BcryptHasher, JwtTokens};
 use fingest_catalog_core::{CategoryRepository, CategoryService};
 use fingest_catalog_pg::PgCategoryRepository;
 use fingest_events::{InProcessPublisher, OutboxRelay, PgOutboxReader, TracingPublisher};
-use fingest_http::{CapabilityReport, TokenVerifierRef};
+use fingest_http::{CapabilityReport, RateLimiter, TokenVerifierRef};
 use fingest_identity_core::{
     AccountRepository, AuthService, PasswordHasher, TokenIssuer, TokenVerifier, UserService,
 };
@@ -64,6 +64,7 @@ pub struct Dependencies {
     budget_service: web::Data<BudgetService>,
     token_verifier: web::Data<TokenVerifierRef>,
     capabilities: web::Data<CapabilityReport>,
+    auth_rate_limiter: web::Data<RateLimiter>,
 }
 
 impl Dependencies {
@@ -109,6 +110,11 @@ impl Dependencies {
             budget_service: web::Data::new(BudgetService::new(budgets, clock_for_wallets)),
             token_verifier: web::Data::new(TokenVerifierRef(verifier)),
             capabilities: web::Data::new(capabilities),
+            // Built once here, outside the worker factory, so every worker shares one count.
+            auth_rate_limiter: web::Data::new(RateLimiter::new(
+                config.auth_rate_limit,
+                Duration::from_secs(config.auth_rate_window_secs),
+            )),
         })
     }
 
@@ -120,7 +126,10 @@ impl Dependencies {
             .app_data(self.budget_service.clone())
             .app_data(self.token_verifier.clone())
             .app_data(self.capabilities.clone())
-            .app_data(fingest_http::json_config_plain());
+            .app_data(self.auth_rate_limiter.clone())
+            .app_data(fingest_http::json_config_plain())
+            .app_data(fingest_http::path_config())
+            .app_data(fingest_http::query_config());
         fingest_http::configure_routes(cfg, Arc::clone(&self.token_verifier.0));
     }
 }
@@ -166,30 +175,34 @@ impl Plugin for TracingPlugin {
 }
 
 /// Fans events out to in-process subscribers.
-struct InProcessPlugin;
+///
+/// The publisher is created by the composition root and shared here, so code that wants
+/// the events can `subscribe()` on the same instance the relay publishes to.
+struct InProcessPlugin(Arc<InProcessPublisher>);
 
 impl Plugin for InProcessPlugin {
     fn name(&self) -> &'static str {
         "in-process"
     }
     fn register(&self, registry: &mut Registry) {
-        registry.add_publisher(Arc::new(InProcessPublisher::default()));
+        registry.add_publisher(Arc::clone(&self.0) as Arc<dyn EventPublisher>);
     }
 }
 
 /// Every plugin compiled into this binary. Configuration selects which run.
-fn plugin_host() -> Result<PluginHost, BootstrapError> {
+fn plugin_host(in_process: Arc<InProcessPublisher>) -> Result<PluginHost, BootstrapError> {
     let mut host = PluginHost::new();
     host.register(Box::new(TracingPlugin))?;
-    host.register(Box::new(InProcessPlugin))?;
+    host.register(Box::new(InProcessPlugin(in_process)))?;
     Ok(host)
 }
 
 /// Activates the configured plugins, yielding the publisher and what clients may ask about.
 fn wire_plugins(
     config: &Config,
+    in_process: Arc<InProcessPublisher>,
 ) -> Result<(Arc<dyn EventPublisher>, CapabilityReport), BootstrapError> {
-    let host = plugin_host()?;
+    let host = plugin_host(in_process)?;
     let available = host.available().into_iter().map(str::to_owned).collect();
     let registry = host.build(&config.plugins)?;
 
@@ -205,7 +218,10 @@ fn wire_plugins(
 pub async fn run(config: Config) -> Result<(), BootstrapError> {
     let pool = connect(&config).await?;
 
-    let (publisher, capabilities) = wire_plugins(&config)?;
+    // Nothing in this binary subscribes yet; until something does, `in-process` keeps
+    // events pending rather than dropping them.
+    let in_process = Arc::new(InProcessPublisher::default());
+    let (publisher, capabilities) = wire_plugins(&config, in_process)?;
     spawn_outbox_relay(pool.clone(), publisher, config.outbox_retention_hours);
 
     let dependencies = Dependencies::build(pool, &config, capabilities)?;
@@ -247,9 +263,13 @@ mod tests {
         .unwrap()
     }
 
+    fn wire(plugins: &str) -> Result<(Arc<dyn EventPublisher>, CapabilityReport), BootstrapError> {
+        wire_plugins(&config(plugins), Arc::new(InProcessPublisher::default()))
+    }
+
     #[test]
     fn the_report_separates_what_is_compiled_in_from_what_is_on() {
-        let (_, report) = wire_plugins(&config("tracing")).unwrap();
+        let (_, report) = wire("tracing").unwrap();
 
         assert_eq!(report.enabled, ["tracing"]);
         assert_eq!(report.available, ["tracing", "in-process"]);
@@ -258,7 +278,7 @@ mod tests {
     /// Neither shipped plugin is a user-facing feature, so a default build advertises none.
     #[test]
     fn publisher_only_plugins_advertise_no_capabilities() {
-        let (_, report) = wire_plugins(&config("tracing,in-process")).unwrap();
+        let (_, report) = wire("tracing,in-process").unwrap();
 
         assert_eq!(report.enabled, ["tracing", "in-process"]);
         assert!(report.capabilities.is_empty());
@@ -266,7 +286,7 @@ mod tests {
 
     #[test]
     fn disabling_publishing_still_reports_what_is_available() {
-        let (_, report) = wire_plugins(&config("")).unwrap();
+        let (_, report) = wire("").unwrap();
 
         assert!(report.enabled.is_empty());
         assert_eq!(report.available, ["tracing", "in-process"]);
@@ -274,7 +294,7 @@ mod tests {
 
     #[test]
     fn a_typo_in_plugins_refuses_to_start_rather_than_silently_disabling() {
-        let Err(err) = wire_plugins(&config("tracing,tracnig")) else {
+        let Err(err) = wire("tracing,tracnig") else {
             panic!("an unknown plugin name must not start the process");
         };
 
@@ -282,5 +302,22 @@ mod tests {
             err,
             BootstrapError::Plugin(PluginError::Unknown(_))
         ));
+    }
+
+    /// The instance the relay publishes to is the one the composition root hands out.
+    #[tokio::test]
+    async fn the_in_process_plugin_publishes_to_the_shared_instance() {
+        let in_process = Arc::new(InProcessPublisher::default());
+        let mut subscriber = in_process.subscribe();
+        let (publisher, _) = wire_plugins(&config("in-process"), Arc::clone(&in_process)).unwrap();
+
+        let event = fingest_kernel::DomainEvent::WalletCreated {
+            login: "bob".into(),
+            wallet_id: 1,
+        };
+        let envelope = fingest_kernel::EventEnvelope::new(&event, SystemClock.now_utc()).unwrap();
+        publisher.publish(&[envelope]).await.unwrap();
+
+        assert_eq!(subscriber.recv().await.unwrap().event_type, "WalletCreated");
     }
 }

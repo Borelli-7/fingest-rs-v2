@@ -11,6 +11,7 @@ pub mod error;
 pub mod extractor;
 pub mod json_config;
 pub mod middleware;
+pub mod rate_limit;
 pub mod resources;
 pub mod users;
 pub mod wallets;
@@ -20,8 +21,9 @@ pub use capabilities::{CapabilityReport, capability_routes};
 pub use catalog::category_routes;
 pub use error::ApiError;
 pub use extractor::{AuthenticatedUser, TokenVerifierRef};
-pub use json_config::{json_config_money, json_config_plain};
+pub use json_config::{json_config_money, json_config_plain, path_config, query_config};
 pub use middleware::JwtAuth;
+pub use rate_limit::RateLimiter;
 pub use resources::user_routes;
 
 /// Registers every route. Contexts are added here as their phases land.
