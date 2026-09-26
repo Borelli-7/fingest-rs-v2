@@ -14,7 +14,7 @@ use fingest_auth_jwt::{BcryptHasher, JwtTokens};
 use fingest_catalog_core::{CategoryRepository, CategoryService};
 use fingest_catalog_pg::PgCategoryRepository;
 use fingest_events::{InProcessPublisher, OutboxRelay, PgOutboxReader, TracingPublisher};
-use fingest_http::{CapabilityReport, TokenVerifierRef};
+use fingest_http::{CapabilityReport, RateLimiter, TokenVerifierRef};
 use fingest_identity_core::{
     AccountRepository, AuthService, PasswordHasher, TokenIssuer, TokenVerifier, UserService,
 };
@@ -64,6 +64,7 @@ pub struct Dependencies {
     budget_service: web::Data<BudgetService>,
     token_verifier: web::Data<TokenVerifierRef>,
     capabilities: web::Data<CapabilityReport>,
+    auth_rate_limiter: web::Data<RateLimiter>,
 }
 
 impl Dependencies {
@@ -109,6 +110,11 @@ impl Dependencies {
             budget_service: web::Data::new(BudgetService::new(budgets, clock_for_wallets)),
             token_verifier: web::Data::new(TokenVerifierRef(verifier)),
             capabilities: web::Data::new(capabilities),
+            // Built once here, outside the worker factory, so every worker shares one count.
+            auth_rate_limiter: web::Data::new(RateLimiter::new(
+                config.auth_rate_limit,
+                Duration::from_secs(config.auth_rate_window_secs),
+            )),
         })
     }
 
@@ -120,6 +126,7 @@ impl Dependencies {
             .app_data(self.budget_service.clone())
             .app_data(self.token_verifier.clone())
             .app_data(self.capabilities.clone())
+            .app_data(self.auth_rate_limiter.clone())
             .app_data(fingest_http::json_config_plain())
             .app_data(fingest_http::path_config())
             .app_data(fingest_http::query_config());
