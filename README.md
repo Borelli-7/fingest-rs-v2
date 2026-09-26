@@ -182,7 +182,7 @@ checksum validation, so use a fresh database.
 | `JWT_SECRET` | — | required, minimum 32 characters |
 | `JWT_EXPIRATION_HOURS` | `24` | |
 | `CORS_ALLOWED_ORIGIN` | `http://localhost:8081` | |
-| `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing |
+| `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing. `in-process` delivers only to subscribers attached to the composition root's publisher; with none attached, events stay pending instead of being dropped |
 | `AUTH_RATE_LIMIT` | `10` | attempts per client address, and per login, on `/api/auth/login` and `/register`; then 429 |
 | `AUTH_RATE_WINDOW_SECS` | `60` | window for `AUTH_RATE_LIMIT`. Counted per instance; behind a proxy, limit there too |
 | `RUST_LOG` | `info` | |
