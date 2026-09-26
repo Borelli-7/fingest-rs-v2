@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "FinGest HTTP API server."
 
 [[bin]]
@@ -13,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 fingest-bootstrap = { path = "../../crates/fingest-bootstrap" }
 actix-web = { workspace = true }
-dotenv = "0.15"
+dotenvy = "0.15"
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@ use fingest_bootstrap::{Config, init_tracing, run};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     let config = Config::from_env().unwrap_or_else(|err| {
         eprintln!("configuration error: {err}");
