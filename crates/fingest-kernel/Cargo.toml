@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Shared kernel: pure domain value objects, errors, clock and event ports. No I/O."
 
 # Dependency rule: this crate MUST NOT depend on sqlx, actix-web, tokio or any adapter crate.
