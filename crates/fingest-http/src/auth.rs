@@ -4,7 +4,7 @@ use fingest_contracts::{
 };
 use fingest_identity_core::{Account, AuthService, NewAccount};
 
-use crate::{error::ApiError, extractor::bearer_token};
+use crate::{error::ApiError, extractor::bearer_token, rate_limit::RateLimiter};
 
 fn to_dto(account: Account) -> UserDto {
     UserDto {
@@ -15,10 +15,35 @@ fn to_dto(account: Account) -> UserDto {
     }
 }
 
+/// Consumes one attempt per key; the first exhausted key refuses the request.
+fn throttle(limiter: &RateLimiter, keys: &[String]) -> Result<(), ApiError> {
+    for key in keys {
+        limiter.check(key).map_err(|wait| {
+            ApiError::TooManyRequests(
+                "Too many attempts. Try again later.".to_owned(),
+                wait.as_secs().max(1),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// The socket peer, never `X-Forwarded-For`: a client-supplied header would let an
+/// attacker pick a fresh key for every request.
+fn peer_key(req: &HttpRequest) -> String {
+    let ip = req
+        .peer_addr()
+        .map_or_else(|| "unknown".to_owned(), |addr| addr.ip().to_string());
+    format!("ip:{ip}")
+}
+
 pub async fn register(
     service: web::Data<AuthService>,
+    limiter: web::Data<RateLimiter>,
+    req: HttpRequest,
     body: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
+    throttle(&limiter, &[peer_key(&req)])?;
     let body = body.into_inner();
     let created = service
         .register(NewAccount {
@@ -35,8 +60,13 @@ pub async fn register(
 
 pub async fn login(
     service: web::Data<AuthService>,
+    limiter: web::Data<RateLimiter>,
+    req: HttpRequest,
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, ApiError> {
+    // Per client and per account, so neither one address nor a botnet can guess freely.
+    throttle(&limiter, &[peer_key(&req), format!("login:{}", body.login)])?;
+
     let (token, account) = service.login(&body.login, &body.password).await?;
 
     Ok(HttpResponse::Ok().json(LoginResponse {
@@ -94,9 +124,16 @@ mod tests {
 
     macro_rules! app_with {
         ($repo:expr) => {
+            app_with!(
+                $repo,
+                RateLimiter::new(1_000, std::time::Duration::from_secs(60))
+            )
+        };
+        ($repo:expr, $limiter:expr) => {
             test::init_service(
                 App::new()
                     .app_data(web::Data::new(auth_service($repo)))
+                    .app_data(web::Data::new($limiter))
                     .app_data(json_config_plain())
                     .configure(auth_routes),
             )
@@ -195,6 +232,54 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let body: ErrorResponse = test::read_body_json(resp).await;
         assert_eq!(body.message, "Invalid credentials");
+    }
+
+    #[actix_web::test]
+    async fn repeated_logins_are_throttled_with_429() {
+        let app = app_with!(
+            Arc::new(InMemoryAccountRepository::new()),
+            RateLimiter::new(2, std::time::Duration::from_secs(60))
+        );
+
+        let attempt = || {
+            test::TestRequest::post()
+                .uri("/api/auth/login")
+                .set_json(serde_json::json!({"login":"bob","password":"guess-guess"}))
+                .to_request()
+        };
+
+        for _ in 0..2 {
+            assert_eq!(
+                test::call_service(&app, attempt()).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+
+        let resp = test::call_service(&app, attempt()).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(resp.headers().contains_key("Retry-After"));
+        let body: ErrorResponse = test::read_body_json(resp).await;
+        assert_eq!(body.status, "429");
+        assert_eq!(body.message, "Too many attempts. Try again later.");
+    }
+
+    #[actix_web::test]
+    async fn registration_is_throttled_too() {
+        let app = app_with!(
+            Arc::new(InMemoryAccountRepository::new()),
+            RateLimiter::new(1, std::time::Duration::from_secs(60))
+        );
+
+        for (login, expected) in [
+            ("first", StatusCode::CREATED),
+            ("second", StatusCode::TOO_MANY_REQUESTS),
+        ] {
+            let req = test::TestRequest::post()
+                .uri("/api/auth/register")
+                .set_json(register_body(login, "correct-horse"))
+                .to_request();
+            assert_eq!(test::call_service(&app, req).await.status(), expected);
+        }
     }
 
     #[actix_web::test]
