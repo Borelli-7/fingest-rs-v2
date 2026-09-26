@@ -76,7 +76,9 @@ mod tests {
     use crate::{json_config::json_config_plain, resources::user_routes};
     use actix_web::{App, http::StatusCode, test};
     use fingest_contracts::ErrorResponse;
-    use fingest_identity_core::testing::{FakeTokens, InMemoryAccountRepository, fixed_clock};
+    use fingest_identity_core::testing::{
+        FakeTokens, InMemoryAccountRepository, auth_service, fixed_clock,
+    };
     use fingest_identity_core::{Account, AccountRepository, TokenVerifier};
     use std::sync::Arc;
 
@@ -95,10 +97,15 @@ mod tests {
 
     macro_rules! app_with {
         ($repo:expr) => {{
+            let repo = $repo;
             let verifier: Arc<dyn TokenVerifier> = Arc::new(FakeTokens);
             test::init_service(
                 App::new()
-                    .app_data(web::Data::new(UserService::new($repo, fixed_clock())))
+                    .app_data(web::Data::new(UserService::new(
+                        repo.clone(),
+                        fixed_clock(),
+                    )))
+                    .app_data(web::Data::new(auth_service(repo)))
                     .app_data(json_config_plain())
                     .configure(|cfg| user_routes(cfg, verifier.clone())),
             )
@@ -306,5 +313,49 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body: ErrorResponse = test::read_body_json(resp).await;
         assert_eq!(body.message, "User with login 'ghost' not found");
+    }
+
+    // --- stale tokens ---
+
+    #[actix_web::test]
+    async fn a_token_for_a_deleted_account_is_401() {
+        let repo = seeded_repo().await;
+        let app = app_with!(repo.clone());
+
+        let delete = test::TestRequest::delete()
+            .insert_header(ADMIN)
+            .uri("/resources/users/alice")
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, delete).await.status(),
+            StatusCode::NO_CONTENT
+        );
+
+        let req = test::TestRequest::put()
+            .insert_header(("Authorization", "Bearer token-for-alice-admin=false"))
+            .uri("/resources/users/alice?field=firstName")
+            .set_json(serde_json::json!({"firstName": "Back"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body: ErrorResponse = test::read_body_json(resp).await;
+        assert_eq!(body.message, "Account no longer exists");
+    }
+
+    /// The token still says admin, the account no longer is.
+    #[actix_web::test]
+    async fn a_stale_admin_claim_does_not_grant_admin() {
+        let app = app_with!(seeded_repo().await);
+
+        let req = test::TestRequest::get()
+            .insert_header(("Authorization", "Bearer token-for-bob-admin=true"))
+            .uri("/resources/users/bob")
+            .to_request();
+
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::FORBIDDEN
+        );
     }
 }

@@ -163,8 +163,28 @@ impl AccountRepository for PgAccountRepository {
         result.map(|r| r.rows_affected()).map_err(to_port_error)
     }
 
+    /// `wallet` has no FK to `account` (ownership lives in `account_wallet`), so the
+    /// cascade alone would strand the wallets and their expenses. Wallets still shared
+    /// with another account survive.
     async fn delete(&self, login: &str, events: &[EventEnvelope]) -> Result<u64, PortError> {
         let mut tx = self.pool.begin().await.map_err(to_port_error)?;
+
+        sqlx::query!(
+            r#"DELETE FROM wallet
+               WHERE id IN (
+                   SELECT aw.wallet_id FROM account_wallet aw
+                   WHERE aw.account_login = $1
+                     AND NOT EXISTS (
+                         SELECT 1 FROM account_wallet other
+                         WHERE other.wallet_id = aw.wallet_id
+                           AND other.account_login <> $1
+                     )
+               )"#,
+            login
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(to_port_error)?;
 
         let deleted = sqlx::query!(r#"DELETE FROM account WHERE login = $1"#, login)
             .execute(&mut *tx)
@@ -264,6 +284,19 @@ mod tests {
         assert!(logins.contains(&"user1".to_owned()));
     }
 
+    /// Migrations run in every environment, so none may leave a usable credential behind.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn migrations_leave_no_account_able_to_log_in(pool: PgPool) {
+        let with_password = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM account WHERE password IS NOT NULL"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(with_password, 0);
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn update_name_touches_only_the_named_field(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
@@ -331,5 +364,86 @@ mod tests {
         .unwrap();
 
         assert_eq!(remaining, 0);
+    }
+
+    async fn count(pool: &PgPool, sql: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_an_account_removes_its_own_wallets_and_their_expenses(pool: PgPool) {
+        // Seeded: user1 solely owns 'Travel Fund', which holds one expense.
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            1
+        );
+
+        PgAccountRepository::new(pool.clone())
+            .delete("user1", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM expense WHERE description = 'Hotel reservation'"
+            )
+            .await,
+            0
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_wallet_shared_with_another_account_survives(pool: PgPool) {
+        sqlx::query(
+            "INSERT INTO account_wallet (account_login, wallet_id)
+             SELECT 'user2', id FROM wallet WHERE name = 'Travel Fund'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        PgAccountRepository::new(pool.clone())
+            .delete("user1", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            1
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_an_unknown_account_touches_no_wallet(pool: PgPool) {
+        let before = count(&pool, "SELECT COUNT(*) FROM wallet").await;
+
+        assert_eq!(
+            PgAccountRepository::new(pool.clone())
+                .delete("ghost", &[])
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM wallet").await, before);
     }
 }
