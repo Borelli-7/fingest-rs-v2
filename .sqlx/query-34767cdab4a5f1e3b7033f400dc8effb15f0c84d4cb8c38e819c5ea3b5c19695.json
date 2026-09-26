@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT category_name FROM expense WHERE wallet_id = 9002",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "category_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "34767cdab4a5f1e3b7033f400dc8effb15f0c84d4cb8c38e819c5ea3b5c19695"
+}

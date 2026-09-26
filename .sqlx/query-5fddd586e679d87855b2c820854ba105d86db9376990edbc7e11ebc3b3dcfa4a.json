@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox SET published_at = now() WHERE payload->>'login' = 'recent'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5fddd586e679d87855b2c820854ba105d86db9376990edbc7e11ebc3b3dcfa4a"
+}

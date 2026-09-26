@@ -270,6 +270,51 @@ mod tests {
         );
     }
 
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn renaming_a_referenced_category_carries_its_references_along(pool: PgPool) {
+        sqlx::query!(
+            r#"INSERT INTO wallet (id, name, amount_amount, amount_currency)
+               VALUES (9002, 'Test Wallet', 100.00, 'USD')"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            r#"INSERT INTO expense
+               (wallet_id, amount_amount, amount_currency, date, description,
+                category_name, category_profit)
+               VALUES (9002, 10.00, 'USD', DATE '2024-01-01', 'lunch', 'Food', false)"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let renamed = repo(pool.clone())
+            .rename("Food", false, "Groceries")
+            .await
+            .unwrap();
+
+        assert_eq!(renamed.name, "Groceries");
+        let category =
+            sqlx::query_scalar!(r#"SELECT category_name FROM expense WHERE wallet_id = 9002"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(category, "Groceries");
+    }
+
+    /// Bypasses the service's advisory check, as a concurrent writer effectively does.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_database_rejects_a_case_variant_duplicate(pool: PgPool) {
+        let repo = repo(pool);
+        repo.insert(&category("Zebra", false)).await.unwrap();
+
+        let err = repo.insert(&category("ZEBRA", false)).await.unwrap_err();
+
+        assert!(matches!(err, PortError::Conflict(_)), "got {err:?}");
+        assert!(repo.insert(&category("ZEBRA", true)).await.is_ok());
+    }
+
     #[test]
     fn migrations_path_is_declared_once() {
         assert_eq!(MIGRATIONS, "../../migrations");

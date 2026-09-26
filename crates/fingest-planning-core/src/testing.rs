@@ -9,12 +9,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use fingest_kernel::{CategoryRef, DateRange, DomainEvent, EventEnvelope, Money, PortError};
+use fingest_kernel::{CategoryRef, DateRange, EventEnvelope, Money, PortError};
 
 use crate::{
     budget::{Budget, BudgetWithSpent},
-    port::BudgetRepository,
+    port::{BudgetRepository, EventsForId},
 };
 
 struct OwnedBudget {
@@ -137,41 +136,45 @@ impl BudgetRepository for InMemoryBudgetRepository {
         &self,
         login: &str,
         budget: &Budget,
-        occurred_at: DateTime<Utc>,
+        events: EventsForId<'_>,
     ) -> Result<i32, PortError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let envelopes = events(id)?;
 
         self.rows.lock().expect("lock poisoned").push(OwnedBudget {
             owner: login.to_owned(),
             budget: budget.clone().with_id(id),
             spent: None,
         });
-
-        let event = DomainEvent::BudgetCreated {
-            login: login.to_owned(),
-            budget_id: id,
-        };
-        self.events
-            .lock()
-            .expect("lock poisoned")
-            .push(EventEnvelope::new(&event, occurred_at)?);
+        self.events.lock().expect("lock poisoned").extend(envelopes);
 
         Ok(id)
     }
 
-    async fn update(&self, budget: &Budget) -> Result<u64, PortError> {
+    async fn update(&self, budget: &Budget, events: &[EventEnvelope]) -> Result<u64, PortError> {
         let mut rows = self.rows.lock().expect("lock poisoned");
         let Some(row) = rows.iter_mut().find(|r| r.budget.id == budget.id) else {
             return Ok(0);
         };
         row.budget = budget.clone();
+        self.events
+            .lock()
+            .expect("lock poisoned")
+            .extend_from_slice(events);
         Ok(1)
     }
 
-    async fn delete(&self, budget_id: i32) -> Result<u64, PortError> {
+    async fn delete(&self, budget_id: i32, events: &[EventEnvelope]) -> Result<u64, PortError> {
         let mut rows = self.rows.lock().expect("lock poisoned");
         let before = rows.len();
         rows.retain(|row| row.budget.id != Some(budget_id));
-        Ok((before - rows.len()) as u64)
+        let deleted = (before - rows.len()) as u64;
+        if deleted > 0 {
+            self.events
+                .lock()
+                .expect("lock poisoned")
+                .extend_from_slice(events);
+        }
+        Ok(deleted)
     }
 }

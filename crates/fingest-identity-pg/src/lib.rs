@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use fingest_identity_core::{Account, AccountRepository, NameField, StoredAccount};
-use fingest_kernel::PortError;
-use sqlx::PgPool;
+use fingest_kernel::{EventEnvelope, PortError};
+use sqlx::{PgPool, Postgres, Transaction};
 
 pub struct PgAccountRepository {
     pool: PgPool,
@@ -22,6 +22,26 @@ fn to_port_error(err: sqlx::Error) -> PortError {
         return PortError::Conflict("Account already exists".to_owned());
     }
     PortError::Storage(err.to_string())
+}
+
+async fn append_events(
+    tx: &mut Transaction<'_, Postgres>,
+    events: &[EventEnvelope],
+) -> Result<(), PortError> {
+    for envelope in events {
+        sqlx::query!(
+            r#"INSERT INTO outbox (aggregate, event_type, payload, occurred_at)
+               VALUES ($1, $2, $3, $4)"#,
+            envelope.aggregate.as_str(),
+            envelope.event_type.as_str(),
+            envelope.payload,
+            envelope.occurred_at
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(to_port_error)?;
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -59,7 +79,14 @@ impl AccountRepository for PgAccountRepository {
         .map_err(to_port_error)
     }
 
-    async fn insert(&self, account: &Account, password_hash: &str) -> Result<Account, PortError> {
+    async fn insert(
+        &self,
+        account: &Account,
+        password_hash: &str,
+        events: &[EventEnvelope],
+    ) -> Result<Account, PortError> {
+        let mut tx = self.pool.begin().await.map_err(to_port_error)?;
+
         let row = sqlx::query!(
             r#"INSERT INTO account (login, first_name, last_name, password, admin)
                VALUES ($1, $2, $3, $4, $5)
@@ -70,9 +97,12 @@ impl AccountRepository for PgAccountRepository {
             password_hash,
             account.admin
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(to_port_error)?;
+
+        append_events(&mut tx, events).await?;
+        tx.commit().await.map_err(to_port_error)?;
 
         Ok(Account {
             login: row.login,
@@ -133,12 +163,40 @@ impl AccountRepository for PgAccountRepository {
         result.map(|r| r.rows_affected()).map_err(to_port_error)
     }
 
-    async fn delete(&self, login: &str) -> Result<u64, PortError> {
-        sqlx::query!(r#"DELETE FROM account WHERE login = $1"#, login)
-            .execute(&self.pool)
+    /// `wallet` has no FK to `account` (ownership lives in `account_wallet`), so the
+    /// cascade alone would strand the wallets and their expenses. Wallets still shared
+    /// with another account survive.
+    async fn delete(&self, login: &str, events: &[EventEnvelope]) -> Result<u64, PortError> {
+        let mut tx = self.pool.begin().await.map_err(to_port_error)?;
+
+        sqlx::query!(
+            r#"DELETE FROM wallet
+               WHERE id IN (
+                   SELECT aw.wallet_id FROM account_wallet aw
+                   WHERE aw.account_login = $1
+                     AND NOT EXISTS (
+                         SELECT 1 FROM account_wallet other
+                         WHERE other.wallet_id = aw.wallet_id
+                           AND other.account_login <> $1
+                     )
+               )"#,
+            login
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(to_port_error)?;
+
+        let deleted = sqlx::query!(r#"DELETE FROM account WHERE login = $1"#, login)
+            .execute(&mut *tx)
             .await
             .map(|r| r.rows_affected())
-            .map_err(to_port_error)
+            .map_err(to_port_error)?;
+
+        if deleted > 0 {
+            append_events(&mut tx, events).await?;
+            tx.commit().await.map_err(to_port_error)?;
+        }
+        Ok(deleted)
     }
 }
 
@@ -154,7 +212,7 @@ mod tests {
     async fn insert_then_find_round_trips(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
 
-        repo.insert(&account("zoe", false), "$2b$12$fakehashvalue")
+        repo.insert(&account("zoe", false), "$2b$12$fakehashvalue", &[])
             .await
             .unwrap();
 
@@ -181,17 +239,21 @@ mod tests {
         let repo = PgAccountRepository::new(pool);
 
         assert!(!repo.exists("zoe").await.unwrap());
-        repo.insert(&account("zoe", false), "hash").await.unwrap();
+        repo.insert(&account("zoe", false), "hash", &[])
+            .await
+            .unwrap();
         assert!(repo.exists("zoe").await.unwrap());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn duplicate_login_maps_to_conflict(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
-        repo.insert(&account("zoe", false), "hash").await.unwrap();
+        repo.insert(&account("zoe", false), "hash", &[])
+            .await
+            .unwrap();
 
         let err = repo
-            .insert(&account("zoe", false), "hash")
+            .insert(&account("zoe", false), "hash", &[])
             .await
             .unwrap_err();
 
@@ -201,7 +263,9 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn admin_flag_persists(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
-        repo.insert(&account("root", true), "hash").await.unwrap();
+        repo.insert(&account("root", true), "hash", &[])
+            .await
+            .unwrap();
 
         assert!(repo.find("root").await.unwrap().unwrap().account.admin);
     }
@@ -220,10 +284,25 @@ mod tests {
         assert!(logins.contains(&"user1".to_owned()));
     }
 
+    /// Migrations run in every environment, so none may leave a usable credential behind.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn migrations_leave_no_account_able_to_log_in(pool: PgPool) {
+        let with_password = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM account WHERE password IS NOT NULL"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(with_password, 0);
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn update_name_touches_only_the_named_field(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
-        repo.insert(&account("zoe", false), "hash").await.unwrap();
+        repo.insert(&account("zoe", false), "hash", &[])
+            .await
+            .unwrap();
 
         assert_eq!(
             repo.update_name("zoe", NameField::First, "Zoraida")
@@ -251,10 +330,12 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn delete_reports_rows_affected(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);
-        repo.insert(&account("zoe", false), "hash").await.unwrap();
+        repo.insert(&account("zoe", false), "hash", &[])
+            .await
+            .unwrap();
 
-        assert_eq!(repo.delete("zoe").await.unwrap(), 1);
-        assert_eq!(repo.delete("zoe").await.unwrap(), 0);
+        assert_eq!(repo.delete("zoe", &[]).await.unwrap(), 1);
+        assert_eq!(repo.delete("zoe", &[]).await.unwrap(), 0);
     }
 
     /// `account_wallet`, `budget` and `saving` all cascade from `account`.
@@ -271,7 +352,7 @@ mod tests {
         .unwrap();
 
         PgAccountRepository::new(pool.clone())
-            .delete("user1")
+            .delete("user1", &[])
             .await
             .unwrap();
 
@@ -283,5 +364,86 @@ mod tests {
         .unwrap();
 
         assert_eq!(remaining, 0);
+    }
+
+    async fn count(pool: &PgPool, sql: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_an_account_removes_its_own_wallets_and_their_expenses(pool: PgPool) {
+        // Seeded: user1 solely owns 'Travel Fund', which holds one expense.
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            1
+        );
+
+        PgAccountRepository::new(pool.clone())
+            .delete("user1", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM expense WHERE description = 'Hotel reservation'"
+            )
+            .await,
+            0
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_wallet_shared_with_another_account_survives(pool: PgPool) {
+        sqlx::query(
+            "INSERT INTO account_wallet (account_login, wallet_id)
+             SELECT 'user2', id FROM wallet WHERE name = 'Travel Fund'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        PgAccountRepository::new(pool.clone())
+            .delete("user1", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM wallet WHERE name = 'Travel Fund'"
+            )
+            .await,
+            1
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_an_unknown_account_touches_no_wallet(pool: PgPool) {
+        let before = count(&pool, "SELECT COUNT(*) FROM wallet").await;
+
+        assert_eq!(
+            PgAccountRepository::new(pool.clone())
+                .delete("ghost", &[])
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM wallet").await, before);
     }
 }
