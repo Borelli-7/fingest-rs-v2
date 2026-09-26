@@ -12,6 +12,7 @@ pub fn json_config_money() -> web::JsonConfig {
         let message = if detail.contains("invalid digit")
             || detail.contains("invalid type")
             || detail.contains("expected")
+            || detail.contains("Invalid amount")
         {
             "The amount is invalid"
         } else {
@@ -37,4 +38,55 @@ pub fn json_config_plain() -> web::JsonConfig {
         )
         .into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{App, http::StatusCode, test};
+    use fingest_kernel::Money;
+
+    async fn accept(_: web::Json<Money>) -> HttpResponse {
+        HttpResponse::Ok().finish()
+    }
+
+    async fn post_amount(amount: &str) -> (StatusCode, Option<ErrorResponse>) {
+        let app = test::init_service(
+            App::new()
+                .app_data(json_config_money())
+                .route("/", web::post().to(accept)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/")
+            .set_json(serde_json::json!({"amount": amount, "currency": "PLN"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status();
+        if status.is_success() {
+            return (status, None);
+        }
+        (status, Some(test::read_body_json(resp).await))
+    }
+
+    #[actix_web::test]
+    async fn an_amount_postgres_would_round_is_400_with_the_v1_message() {
+        let (status, body) = post_amount("10.005").await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.unwrap().message, "The amount is invalid");
+    }
+
+    #[actix_web::test]
+    async fn an_amount_that_would_overflow_is_400_not_500() {
+        let (status, body) = post_amount("100000000000000000").await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.unwrap().message, "The amount is invalid");
+    }
+
+    #[actix_web::test]
+    async fn a_storable_amount_is_accepted() {
+        assert_eq!(post_amount("10.50").await.0, StatusCode::OK);
+    }
 }
