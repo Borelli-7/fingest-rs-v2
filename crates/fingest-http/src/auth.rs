@@ -19,6 +19,7 @@ pub async fn register(
     service: web::Data<AuthService>,
     body: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, ApiError> {
+    // `admin` stays in the wire contract for v1 parity but is ignored (deviation D15).
     let body = body.into_inner();
     let created = service
         .register(NewAccount {
@@ -26,7 +27,6 @@ pub async fn register(
             first_name: body.first_name,
             last_name: body.last_name,
             password: body.password,
-            admin: body.admin.unwrap_or(false),
         })
         .await?;
 
@@ -79,6 +79,7 @@ mod tests {
     use crate::json_config::json_config_plain;
     use actix_web::{App, http::StatusCode, test};
     use fingest_contracts::ErrorResponse;
+    use fingest_identity_core::AccountRepository;
     use fingest_identity_core::testing::{CountingHasher, FakeTokens, InMemoryAccountRepository};
     use std::sync::Arc;
 
@@ -123,6 +124,30 @@ mod tests {
         assert_eq!(body["login"], "bob");
         assert!(body.get("password").is_none());
         assert!(body.get("password_hash").is_none());
+    }
+
+    #[actix_web::test]
+    async fn register_ignores_a_requested_admin_flag() {
+        let repo = Arc::new(InMemoryAccountRepository::new());
+        let app = app_with!(repo.clone());
+
+        let req = test::TestRequest::post()
+            .uri("/api/auth/register")
+            .set_json(serde_json::json!({
+                "login": "mallory",
+                "password": "correct-horse",
+                "admin": true
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["admin"], false);
+        assert!(
+            !repo.find("mallory").await.unwrap().unwrap().account.admin,
+            "self-registration must not grant admin"
+        );
     }
 
     #[actix_web::test]

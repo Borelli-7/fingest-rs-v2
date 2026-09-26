@@ -7,12 +7,13 @@ use crate::{
     port::{AccountRepository, PasswordHasher, TokenIssuer, TokenVerifier},
 };
 
+/// Self-registration input. Carries no privilege flag: a public route must never be able
+/// to create an administrator.
 pub struct NewAccount {
     pub login: String,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub password: String,
-    pub admin: bool,
 }
 
 pub struct AuthService {
@@ -43,7 +44,7 @@ impl AuthService {
             new_account.login,
             new_account.first_name,
             new_account.last_name,
-            new_account.admin,
+            false,
         )?;
         let password = Password::new(new_account.password)?;
 
@@ -121,7 +122,6 @@ mod tests {
             first_name: None,
             last_name: None,
             password: password.to_owned(),
-            admin: false,
         }
     }
 
@@ -136,6 +136,17 @@ mod tests {
         let hash = stored.password_hash.unwrap();
         assert_ne!(hash, "correct-horse");
         assert!(hash.starts_with("hashed:"));
+    }
+
+    #[test]
+    fn registration_never_creates_an_admin() {
+        let repo = Arc::new(InMemoryAccountRepository::new());
+        let svc = service(repo.clone(), Arc::new(CountingHasher::new()));
+
+        let created = block_on(svc.register(new_account("bob", "correct-horse"))).unwrap();
+
+        assert!(!created.admin);
+        assert!(!block_on(repo.find("bob")).unwrap().unwrap().account.admin);
     }
 
     #[test]
