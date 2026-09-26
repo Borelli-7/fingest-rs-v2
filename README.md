@@ -171,6 +171,7 @@ checksum validation, so use a fresh database.
 | `JWT_EXPIRATION_HOURS` | `24` | |
 | `CORS_ALLOWED_ORIGIN` | `http://localhost:8081` | |
 | `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing |
+| `OUTBOX_RETENTION_HOURS` | `168` | published outbox rows older than this are purged hourly; `0` keeps them forever |
 | `RUST_LOG` | `info` | |
 
 ## Testing
@@ -199,6 +200,10 @@ polls every 5 seconds and hands batches to the configured publishers.
 
 Delivery is **at-least-once** — rows are marked published only after a successful publish, so a
 broker outage leaves them pending rather than dropping them. Subscribers must be idempotent.
+
+Each relay claims its batch with a 60-second lease (`FOR UPDATE SKIP LOCKED`), so several API
+replicas can share one database without publishing the same row twice. A relay that dies
+mid-batch loses its claim when the lease expires.
 
 The drain cycle, including its failure path, is diagrammed in
 [docs/architecture.md](docs/architecture.md#one-outbox-drain-cycle).

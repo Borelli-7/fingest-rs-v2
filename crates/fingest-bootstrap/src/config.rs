@@ -13,6 +13,8 @@ pub struct Config {
     pub jwt_secret: String,
     pub jwt_expiration_hours: i64,
     pub cors_allowed_origin: String,
+    /// Published outbox rows older than this are deleted; `0` keeps them forever.
+    pub outbox_retention_hours: u64,
     /// Names of the event plugins to activate, in order.
     pub plugins: Vec<String>,
 }
@@ -62,6 +64,9 @@ impl Config {
                 .parse()
                 .map_err(|_| ConfigError::Invalid("JWT_EXPIRATION_HOURS"))?,
             cors_allowed_origin: parsed("CORS_ALLOWED_ORIGIN", "http://localhost:8081")?,
+            outbox_retention_hours: parsed("OUTBOX_RETENTION_HOURS", "168")?
+                .parse()
+                .map_err(|_| ConfigError::Invalid("OUTBOX_RETENTION_HOURS"))?,
             plugins: parsed("PLUGINS", "tracing")?
                 .split(',')
                 .map(str::trim)
@@ -103,6 +108,7 @@ mod tests {
         assert_eq!(config.log_level, "info");
         assert_eq!(config.jwt_expiration_hours, 24);
         assert_eq!(config.plugins, vec!["tracing".to_owned()]);
+        assert_eq!(config.outbox_retention_hours, 168);
     }
 
     #[test]
