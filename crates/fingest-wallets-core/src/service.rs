@@ -163,6 +163,12 @@ impl WalletService {
             }
         }
 
+        let updated = [DomainEvent::WalletUpdated {
+            login: login.to_owned(),
+            wallet_id,
+        }];
+        tx.append_events(&envelopes(&updated, self.clock.now_utc())?)
+            .await?;
         tx.commit().await?;
 
         Ok(wallet)
@@ -177,6 +183,12 @@ impl WalletService {
         if tx.delete_wallet(wallet_id).await? == 0 {
             return Err(WalletsError::wallet_not_found(wallet_id));
         }
+        let events = [DomainEvent::WalletDeleted {
+            login: login.to_owned(),
+            wallet_id,
+        }];
+        tx.append_events(&envelopes(&events, self.clock.now_utc())?)
+            .await?;
         tx.commit().await?;
 
         Ok(())
@@ -502,7 +514,7 @@ mod tests {
     // --- update_wallet ---
 
     #[test]
-    fn renaming_leaves_the_balance_and_the_outbox_alone() {
+    fn renaming_leaves_the_balance_alone_and_records_no_balance_event() {
         let store = store();
 
         let updated = block_on(service(Arc::clone(&store)).update_wallet(
@@ -517,7 +529,7 @@ mod tests {
 
         assert_eq!(updated.name, "Daily");
         assert_eq!(store.balance_of(WALLET).unwrap(), pln(100));
-        assert!(store.recorded_events().is_empty());
+        assert_eq!(store.recorded_events(), vec!["WalletUpdated"]);
     }
 
     /// The rename must not write back the balance it read: a concurrent expense may have
@@ -556,7 +568,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(store.balance_of(WALLET).unwrap(), pln(250));
-        assert_eq!(store.recorded_events(), vec!["WalletBalanceAdjusted"]);
+        assert_eq!(
+            store.recorded_events(),
+            vec!["WalletBalanceAdjusted", "WalletUpdated"]
+        );
     }
 
     #[test]
@@ -579,6 +594,33 @@ mod tests {
     }
 
     // --- record_expense ---
+
+    #[test]
+    fn updating_a_wallet_emits_wallet_updated() {
+        let store = store();
+
+        block_on(service(Arc::clone(&store)).update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: Some("Daily".into()),
+                amount: None,
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(store.recorded_events(), vec!["WalletUpdated"]);
+    }
+
+    #[test]
+    fn deleting_a_wallet_emits_wallet_deleted() {
+        let store = store();
+
+        block_on(service(Arc::clone(&store)).delete_wallet(OWNER, WALLET)).unwrap();
+
+        assert_eq!(store.wallet_count(), 0);
+        assert_eq!(store.recorded_events(), vec!["WalletDeleted"]);
+    }
 
     #[test]
     fn recording_spending_moves_the_balance_in_one_transaction() {

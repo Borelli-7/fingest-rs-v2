@@ -824,6 +824,7 @@ name = "fingest-identity-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "fingest-kernel",
  "futures-executor",
  "serde",

@@ -110,7 +110,9 @@ mod tests {
     use actix_web::{App, http::StatusCode, test};
     use fingest_contracts::ErrorResponse;
     use fingest_identity_core::AccountRepository;
-    use fingest_identity_core::testing::{CountingHasher, FakeTokens, InMemoryAccountRepository};
+    use fingest_identity_core::testing::{
+        CountingHasher, FakeTokens, InMemoryAccountRepository, fixed_clock,
+    };
     use std::sync::Arc;
 
     fn auth_service(repo: Arc<InMemoryAccountRepository>) -> AuthService {
@@ -120,6 +122,7 @@ mod tests {
             Arc::new(CountingHasher::new()),
             tokens.clone(),
             tokens,
+            fixed_clock(),
         )
     }
 

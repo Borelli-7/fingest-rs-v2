@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use fingest_kernel::{Clock, DomainEvent, EventEnvelope};
+
 use crate::{
     account::{Account, NameField},
     error::IdentityError,
@@ -12,11 +14,12 @@ use crate::{
 /// lives; this layer only knows about accounts.
 pub struct UserService {
     accounts: Arc<dyn AccountRepository>,
+    clock: Arc<dyn Clock>,
 }
 
 impl UserService {
-    pub fn new(accounts: Arc<dyn AccountRepository>) -> Self {
-        Self { accounts }
+    pub fn new(accounts: Arc<dyn AccountRepository>, clock: Arc<dyn Clock>) -> Self {
+        Self { accounts, clock }
     }
 
     pub async fn list(&self) -> Result<Vec<Account>, IdentityError> {
@@ -52,7 +55,13 @@ impl UserService {
             )));
         }
 
-        if self.accounts.delete(login).await? == 0 {
+        let events = EventEnvelope::for_all(
+            &[DomainEvent::AccountDeleted {
+                login: login.to_owned(),
+            }],
+            self.clock.now_utc(),
+        )?;
+        if self.accounts.delete(login, &events).await? == 0 {
             // Row vanished between the check and the delete.
             return Err(IdentityError::Internal("Failed to delete user".to_owned()));
         }
@@ -64,18 +73,18 @@ impl UserService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::InMemoryAccountRepository;
+    use crate::testing::{InMemoryAccountRepository, fixed_clock};
     use futures_executor::block_on;
 
     fn service(repo: Arc<InMemoryAccountRepository>) -> UserService {
-        UserService::new(repo)
+        UserService::new(repo, fixed_clock())
     }
 
     fn seeded() -> Arc<InMemoryAccountRepository> {
         let repo = Arc::new(InMemoryAccountRepository::new());
         let account = Account::new("bob", Some("Bob".into()), Some("Builder".into()), false)
             .expect("valid fixture");
-        block_on(repo.insert(&account, "hash")).unwrap();
+        block_on(repo.insert(&account, "hash", &[])).unwrap();
         repo
     }
 
@@ -156,6 +165,7 @@ mod tests {
         block_on(service(repo.clone()).delete("bob")).unwrap();
 
         assert!(repo.is_empty());
+        assert_eq!(repo.event_types(), vec!["AccountDeleted"]);
     }
 
     #[test]

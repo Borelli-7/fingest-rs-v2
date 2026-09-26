@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
-use chrono::{DateTime, NaiveDate, Utc};
-use fingest_kernel::{
-    CategoryRef, Currency, DateRange, DomainEvent, EventEnvelope, Money, PortError,
+use chrono::NaiveDate;
+use fingest_kernel::{CategoryRef, Currency, DateRange, EventEnvelope, Money, PortError};
+use fingest_planning_core::{
+    Budget, BudgetRepository, BudgetWithSpent, EventsForId, Saving, SavingRepository,
 };
-use fingest_planning_core::{Budget, BudgetRepository, BudgetWithSpent, Saving, SavingRepository};
 use sqlx::PgPool;
 
 fn money(amount: BigDecimal, currency: &str) -> Result<Money, PortError> {
@@ -180,7 +180,7 @@ impl BudgetRepository for PgBudgetRepository {
         &self,
         login: &str,
         new: &Budget,
-        occurred_at: DateTime<Utc>,
+        events: EventsForId<'_>,
     ) -> Result<i32, PortError> {
         let mut tx = self.pool.begin().await.map_err(to_port_error)?;
 
@@ -202,31 +202,16 @@ impl BudgetRepository for PgBudgetRepository {
         .await
         .map_err(to_port_error)?;
 
-        let event = DomainEvent::BudgetCreated {
-            login: login.to_owned(),
-            budget_id: id,
-        };
-        let envelope = EventEnvelope::new(&event, occurred_at)?;
-
-        sqlx::query!(
-            r#"INSERT INTO outbox (aggregate, event_type, payload, occurred_at)
-               VALUES ($1, $2, $3, $4)"#,
-            envelope.aggregate.as_str(),
-            envelope.event_type.as_str(),
-            envelope.payload,
-            envelope.occurred_at
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(to_port_error)?;
-
+        append_events(&mut tx, &events(id)?).await?;
         tx.commit().await.map_err(to_port_error)?;
 
         Ok(id)
     }
 
-    async fn update(&self, updated: &Budget) -> Result<u64, PortError> {
-        sqlx::query!(
+    async fn update(&self, updated: &Budget, events: &[EventEnvelope]) -> Result<u64, PortError> {
+        let mut tx = self.pool.begin().await.map_err(to_port_error)?;
+
+        let rows = sqlx::query!(
             r#"UPDATE budget
                SET category_name = $1, category_profit = $2,
                    total_amount = $3, total_currency = $4,
@@ -240,19 +225,53 @@ impl BudgetRepository for PgBudgetRepository {
             updated.date_range.end,
             updated.id
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map(|r| r.rows_affected())
-        .map_err(to_port_error)
+        .map_err(to_port_error)?;
+
+        if rows > 0 {
+            append_events(&mut tx, events).await?;
+            tx.commit().await.map_err(to_port_error)?;
+        }
+        Ok(rows)
     }
 
-    async fn delete(&self, budget_id: i32) -> Result<u64, PortError> {
-        sqlx::query!(r#"DELETE FROM budget WHERE id = $1"#, budget_id)
-            .execute(&self.pool)
+    async fn delete(&self, budget_id: i32, events: &[EventEnvelope]) -> Result<u64, PortError> {
+        let mut tx = self.pool.begin().await.map_err(to_port_error)?;
+
+        let rows = sqlx::query!(r#"DELETE FROM budget WHERE id = $1"#, budget_id)
+            .execute(&mut *tx)
             .await
             .map(|r| r.rows_affected())
-            .map_err(to_port_error)
+            .map_err(to_port_error)?;
+
+        if rows > 0 {
+            append_events(&mut tx, events).await?;
+            tx.commit().await.map_err(to_port_error)?;
+        }
+        Ok(rows)
     }
+}
+
+async fn append_events(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    events: &[EventEnvelope],
+) -> Result<(), PortError> {
+    for envelope in events {
+        sqlx::query!(
+            r#"INSERT INTO outbox (aggregate, event_type, payload, occurred_at)
+               VALUES ($1, $2, $3, $4)"#,
+            envelope.aggregate.as_str(),
+            envelope.event_type.as_str(),
+            envelope.payload,
+            envelope.occurred_at
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(to_port_error)?;
+    }
+    Ok(())
 }
 
 pub struct PgSavingRepository {
@@ -354,12 +373,37 @@ mod tests {
         Budget::new(food(), pln(total), year_2024()).unwrap()
     }
 
+    fn no_events(_: i32) -> Result<Vec<EventEnvelope>, PortError> {
+        Ok(Vec::new())
+    }
+
+    fn created(budget_id: i32) -> Result<Vec<EventEnvelope>, PortError> {
+        EventEnvelope::for_all(
+            &[fingest_kernel::DomainEvent::BudgetCreated {
+                login: OWNER.into(),
+                budget_id,
+            }],
+            chrono::Utc::now(),
+        )
+    }
+
+    fn one_event(event: fingest_kernel::DomainEvent) -> Vec<EventEnvelope> {
+        EventEnvelope::for_all(&[event], chrono::Utc::now()).unwrap()
+    }
+
+    async fn outbox_types(pool: &PgPool) -> Vec<String> {
+        sqlx::query_scalar!(r#"SELECT event_type FROM outbox ORDER BY id"#)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn insert_then_find_round_trips(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool);
 
         let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
+            .insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -374,10 +418,7 @@ mod tests {
     async fn insert_writes_a_real_row_and_an_outbox_event(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool.clone());
 
-        let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
-            .await
-            .unwrap();
+        let id = repo.insert(OWNER, &a_budget(500), &created).await.unwrap();
 
         let rows = sqlx::query_scalar!(
             r#"SELECT COUNT(*) AS "count!" FROM budget WHERE id = $1"#,
@@ -398,10 +439,51 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    async fn update_and_delete_write_their_events_only_when_a_row_changed(pool: PgPool) {
+        use fingest_kernel::DomainEvent::{BudgetDeleted, BudgetUpdated};
+
+        let repo = PgBudgetRepository::new(pool.clone());
+        let id = repo
+            .insert(OWNER, &a_budget(500), &no_events)
+            .await
+            .unwrap();
+        let login = OWNER.to_owned();
+
+        let updated = one_event(BudgetUpdated {
+            login: login.clone(),
+            budget_id: id,
+        });
+        let deleted = one_event(BudgetDeleted {
+            login,
+            budget_id: id,
+        });
+
+        assert_eq!(
+            repo.update(&a_budget(600).with_id(id), &updated)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(repo.delete(id, &deleted).await.unwrap(), 1);
+        assert_eq!(
+            repo.update(&a_budget(700).with_id(id), &updated)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(repo.delete(id, &deleted).await.unwrap(), 0);
+
+        assert_eq!(
+            outbox_types(&pool).await,
+            ["BudgetUpdated", "BudgetDeleted"]
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
     async fn spending_is_summed_against_the_budget(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool.clone());
         let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
+            .insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -443,7 +525,7 @@ mod tests {
     async fn spending_in_another_currency_does_not_count(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool.clone());
         let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
+            .insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -490,7 +572,7 @@ mod tests {
     async fn a_budget_with_no_spending_reports_zero(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool);
         let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
+            .insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -506,7 +588,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn the_start_window_filters_results(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool);
-        repo.insert(OWNER, &a_budget(500), Utc::now())
+        repo.insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -521,7 +603,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn another_users_budgets_are_not_listed(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool);
-        repo.insert(OWNER, &a_budget(500), Utc::now())
+        repo.insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
@@ -537,19 +619,19 @@ mod tests {
     async fn update_and_delete_report_rows_affected(pool: PgPool) {
         let repo = PgBudgetRepository::new(pool);
         let id = repo
-            .insert(OWNER, &a_budget(500), Utc::now())
+            .insert(OWNER, &a_budget(500), &no_events)
             .await
             .unwrap();
 
         let changed = a_budget(750).with_id(id);
-        assert_eq!(repo.update(&changed).await.unwrap(), 1);
+        assert_eq!(repo.update(&changed, &[]).await.unwrap(), 1);
         assert_eq!(
             repo.find_with_owner(id).await.unwrap().unwrap().0.total,
             pln(750)
         );
 
-        assert_eq!(repo.delete(id).await.unwrap(), 1);
-        assert_eq!(repo.delete(id).await.unwrap(), 0);
+        assert_eq!(repo.delete(id, &[]).await.unwrap(), 1);
+        assert_eq!(repo.delete(id, &[]).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -562,7 +644,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = repo.insert(OWNER, &orphan, Utc::now()).await.unwrap_err();
+        let err = repo.insert(OWNER, &orphan, &no_events).await.unwrap_err();
 
         assert!(matches!(err, PortError::Conflict(_)), "got {err:?}");
     }
