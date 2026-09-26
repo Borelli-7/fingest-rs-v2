@@ -128,6 +128,7 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D12 | `JWT_SECRET` under 32 chars | accepted | process refuses to start |
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
 | D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
+| D17 | any protected route, token for a deleted or demoted account | honoured until `exp` | 401 `Account no longer exists`; admin rights follow the stored account |
 
 Two further fixes change no status code and so have no D-number:
 
