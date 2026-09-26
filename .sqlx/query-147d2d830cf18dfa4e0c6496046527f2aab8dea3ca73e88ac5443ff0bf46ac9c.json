@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox SET published_at = now(), claimed_until = NULL\n               WHERE id = ANY($1) AND published_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "147d2d830cf18dfa4e0c6496046527f2aab8dea3ca73e88ac5443ff0bf46ac9c"
+}

@@ -185,6 +185,7 @@ checksum validation, so use a fresh database.
 | `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing. `in-process` delivers only to subscribers attached to the composition root's publisher; with none attached, events stay pending instead of being dropped |
 | `AUTH_RATE_LIMIT` | `10` | attempts per client address, and per login, on `/api/auth/login` and `/register`; then 429 |
 | `AUTH_RATE_WINDOW_SECS` | `60` | window for `AUTH_RATE_LIMIT`. Counted per instance; behind a proxy, limit there too |
+| `OUTBOX_RETENTION_HOURS` | `168` | published outbox rows older than this are purged hourly; `0` keeps them forever |
 | `RUST_LOG` | `info` | |
 
 ## Testing
@@ -213,6 +214,10 @@ polls every 5 seconds and hands batches to the configured publishers.
 
 Delivery is **at-least-once** — rows are marked published only after a successful publish, so a
 broker outage leaves them pending rather than dropping them. Subscribers must be idempotent.
+
+Each relay claims its batch with a 60-second lease (`FOR UPDATE SKIP LOCKED`), so several API
+replicas can share one database without publishing the same row twice. A relay that dies
+mid-batch loses its claim when the lease expires.
 
 The drain cycle, including its failure path, is diagrammed in
 [docs/architecture.md](docs/architecture.md#one-outbox-drain-cycle).

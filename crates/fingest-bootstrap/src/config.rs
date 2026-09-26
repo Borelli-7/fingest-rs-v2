@@ -13,6 +13,8 @@ pub struct Config {
     pub jwt_secret: String,
     pub jwt_expiration_hours: i64,
     pub cors_allowed_origin: String,
+    /// Published outbox rows older than this are deleted; `0` keeps them forever.
+    pub outbox_retention_hours: u64,
     /// Attempts allowed per client address, and per login, on the credential endpoints.
     pub auth_rate_limit: u32,
     pub auth_rate_window_secs: u64,
@@ -76,6 +78,9 @@ impl Config {
                 .parse()
                 .map_err(|_| ConfigError::Invalid("JWT_EXPIRATION_HOURS"))?,
             cors_allowed_origin: parsed("CORS_ALLOWED_ORIGIN", "http://localhost:8081")?,
+            outbox_retention_hours: parsed("OUTBOX_RETENTION_HOURS", "168")?
+                .parse()
+                .map_err(|_| ConfigError::Invalid("OUTBOX_RETENTION_HOURS"))?,
             auth_rate_limit: positive(parsed("AUTH_RATE_LIMIT", "10")?, "AUTH_RATE_LIMIT")?,
             auth_rate_window_secs: positive(
                 parsed("AUTH_RATE_WINDOW_SECS", "60")?,
@@ -122,6 +127,7 @@ mod tests {
         assert_eq!(config.log_level, "info");
         assert_eq!(config.jwt_expiration_hours, 24);
         assert_eq!(config.plugins, vec!["tracing".to_owned()]);
+        assert_eq!(config.outbox_retention_hours, 168);
         assert_eq!(config.auth_rate_limit, 10);
         assert_eq!(config.auth_rate_window_secs, 60);
     }

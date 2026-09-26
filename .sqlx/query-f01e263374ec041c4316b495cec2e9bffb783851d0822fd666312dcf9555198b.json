@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox SET published_at = now() - interval '400 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f01e263374ec041c4316b495cec2e9bffb783851d0822fd666312dcf9555198b"
+}

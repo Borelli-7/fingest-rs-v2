@@ -153,8 +153,11 @@ pub fn init_tracing(log_level: &str) {
 
 /// Publishes outbox rows in the background. Detached on purpose: a publishing outage must
 /// not stop the API from serving requests, and unpublished rows simply wait.
-fn spawn_outbox_relay(pool: PgPool, publisher: Arc<dyn EventPublisher>) {
-    let relay = OutboxRelay::new(Arc::new(PgOutboxReader::new(pool)), publisher);
+fn spawn_outbox_relay(pool: PgPool, publisher: Arc<dyn EventPublisher>, retention_hours: u64) {
+    let mut relay = OutboxRelay::new(Arc::new(PgOutboxReader::new(pool)), publisher);
+    if retention_hours > 0 {
+        relay = relay.with_retention(Duration::from_secs(retention_hours * 3600));
+    }
 
     tokio::spawn(relay.run(OUTBOX_POLL_INTERVAL));
 }
@@ -219,7 +222,7 @@ pub async fn run(config: Config) -> Result<(), BootstrapError> {
     // events pending rather than dropping them.
     let in_process = Arc::new(InProcessPublisher::default());
     let (publisher, capabilities) = wire_plugins(&config, in_process)?;
-    spawn_outbox_relay(pool.clone(), publisher);
+    spawn_outbox_relay(pool.clone(), publisher, config.outbox_retention_hours);
 
     let dependencies = Dependencies::build(pool, &config, capabilities)?;
     let allowed_origin = config.cors_allowed_origin.clone();
