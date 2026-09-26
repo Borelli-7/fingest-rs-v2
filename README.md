@@ -170,7 +170,7 @@ checksum validation, so use a fresh database.
 | `JWT_SECRET` | — | required, minimum 32 characters |
 | `JWT_EXPIRATION_HOURS` | `24` | |
 | `CORS_ALLOWED_ORIGIN` | `http://localhost:8081` | |
-| `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing |
+| `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing. `in-process` delivers only to subscribers attached to the composition root's publisher; with none attached, events stay pending instead of being dropped |
 | `RUST_LOG` | `info` | |
 
 ## Testing

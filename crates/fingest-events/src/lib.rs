@@ -161,8 +161,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publishing_without_subscribers_is_not_an_error() {
+    async fn publishing_without_subscribers_fails_so_rows_stay_pending() {
         let publisher = InProcessPublisher::new(8);
-        assert!(publisher.publish(&[envelope("alice")]).await.is_ok());
+
+        assert!(matches!(
+            publisher.publish(&[envelope("alice")]).await.unwrap_err(),
+            fingest_kernel::PortError::Unavailable(_)
+        ));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_relay_does_not_mark_events_nobody_received(pool: PgPool) {
+        append(&pool, &envelope("alice")).await;
+
+        let result = relay(&pool, Arc::new(InProcessPublisher::new(8)))
+            .drain_once()
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(unpublished_count(&pool).await, 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_in_process_subscriber_receives_outbox_events(pool: PgPool) {
+        append(&pool, &envelope("alice")).await;
+        let publisher = Arc::new(InProcessPublisher::new(8));
+        let mut subscriber = publisher.subscribe();
+
+        relay(&pool, publisher).drain_once().await.unwrap();
+
+        assert_eq!(
+            subscriber.recv().await.unwrap().event_type,
+            "AccountRegistered"
+        );
+        assert_eq!(unpublished_count(&pool).await, 0);
     }
 }
