@@ -808,6 +808,8 @@ version = "0.1.0"
 dependencies = [
  "actix-rt",
  "actix-web",
+ "bigdecimal",
+ "chrono",
  "fingest-catalog-core",
  "fingest-contracts",
  "fingest-identity-core",
