@@ -229,6 +229,59 @@ mod tests {
         );
     }
 
+    /// An update racing an uncommitted delete must see the delete, not a stale copy of the
+    /// expense: otherwise its delta lands on the balance with no row left to justify it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_update_racing_a_delete_leaves_the_balance_consistent(pool: PgPool) {
+        use fingest_kernel::SystemClock;
+        use fingest_wallets_core::{ExpensePatch, WalletService, WalletsError};
+        use std::sync::Arc;
+
+        let wallet_id = seed_wallet(&pool, 100).await;
+        let uow = PgUnitOfWork::new(pool.clone());
+
+        let mut setup = uow.begin().await.unwrap();
+        let expense_id = setup.insert_expense(wallet_id, &entry(30)).await.unwrap();
+        setup.adjust_balance(wallet_id, &pln(-30)).await.unwrap();
+        setup.commit().await.unwrap();
+
+        let mut deleting = uow.begin().await.unwrap();
+        deleting.find_owned(OWNER, wallet_id).await.unwrap();
+        deleting
+            .delete_expense(wallet_id, expense_id)
+            .await
+            .unwrap();
+        deleting.adjust_balance(wallet_id, &pln(30)).await.unwrap();
+
+        let service = WalletService::new(
+            Arc::new(PgWalletReader::new(pool.clone())),
+            Arc::new(PgUnitOfWork::new(pool.clone())),
+            Arc::new(SystemClock),
+        );
+        let update = tokio::spawn(async move {
+            service
+                .update_expense(
+                    OWNER,
+                    wallet_id,
+                    expense_id,
+                    ExpensePatch {
+                        amount: Some(pln(50)),
+                        ..Default::default()
+                    },
+                )
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        deleting.commit().await.unwrap();
+
+        assert_eq!(
+            update.await.unwrap().unwrap_err(),
+            WalletsError::expense_not_found(expense_id)
+        );
+        assert_eq!(balance_of(&pool, wallet_id).await, BigDecimal::from(100));
+    }
+
     /// A rename racing an uncommitted balance change must wait for it and must not write
     /// the stale balance back.
     #[sqlx::test(migrations = "../../migrations")]

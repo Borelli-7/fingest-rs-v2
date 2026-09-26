@@ -3,7 +3,7 @@ use fingest_kernel::{CategoryRef, EventEnvelope, Money, PortError};
 use fingest_wallets_core::{Expense, UnitOfWork, Wallet, WalletTx};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::mapping::{to_port_error, wallet};
+use crate::mapping::{expense, to_port_error, wallet};
 
 pub struct PgUnitOfWork {
     pool: PgPool,
@@ -64,6 +64,38 @@ impl WalletTx for PgWalletTx {
 
         row.map(|row| wallet(row.id, row.name, row.amount_amount, row.amount_currency))
             .transpose()
+    }
+
+    async fn find_expense(
+        &mut self,
+        wallet_id: i32,
+        expense_id: i32,
+    ) -> Result<Option<Expense>, PortError> {
+        let row = sqlx::query!(
+            r#"SELECT id, amount_amount, amount_currency, date, description,
+                      category_name, category_profit
+               FROM expense
+               WHERE wallet_id = $1 AND id = $2
+               FOR UPDATE"#,
+            wallet_id,
+            expense_id
+        )
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(to_port_error)?;
+
+        row.map(|row| {
+            expense(
+                row.id,
+                row.amount_amount,
+                row.amount_currency,
+                row.date,
+                row.description,
+                row.category_name,
+                row.category_profit,
+            )
+        })
+        .transpose()
     }
 
     async fn insert_wallet(&mut self, login: &str, new: &Wallet) -> Result<i32, PortError> {
