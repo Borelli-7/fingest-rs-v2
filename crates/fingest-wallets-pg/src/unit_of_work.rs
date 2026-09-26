@@ -3,7 +3,7 @@ use fingest_kernel::{CategoryRef, EventEnvelope, Money, PortError};
 use fingest_wallets_core::{Expense, UnitOfWork, Wallet, WalletTx};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::mapping::{to_port_error, wallet};
+use crate::mapping::{expense, to_port_error, wallet};
 
 pub struct PgUnitOfWork {
     pool: PgPool,
@@ -66,6 +66,38 @@ impl WalletTx for PgWalletTx {
             .transpose()
     }
 
+    async fn find_expense(
+        &mut self,
+        wallet_id: i32,
+        expense_id: i32,
+    ) -> Result<Option<Expense>, PortError> {
+        let row = sqlx::query!(
+            r#"SELECT id, amount_amount, amount_currency, date, description,
+                      category_name, category_profit
+               FROM expense
+               WHERE wallet_id = $1 AND id = $2
+               FOR UPDATE"#,
+            wallet_id,
+            expense_id
+        )
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(to_port_error)?;
+
+        row.map(|row| {
+            expense(
+                row.id,
+                row.amount_amount,
+                row.amount_currency,
+                row.date,
+                row.description,
+                row.category_name,
+                row.category_profit,
+            )
+        })
+        .transpose()
+    }
+
     async fn insert_wallet(&mut self, login: &str, new: &Wallet) -> Result<i32, PortError> {
         let id = sqlx::query_scalar!(
             r#"INSERT INTO wallet (name, amount_amount, amount_currency)
@@ -90,15 +122,11 @@ impl WalletTx for PgWalletTx {
         Ok(id)
     }
 
-    async fn update_wallet(&mut self, updated: &Wallet) -> Result<u64, PortError> {
+    async fn rename_wallet(&mut self, wallet_id: i32, name: &str) -> Result<u64, PortError> {
         sqlx::query!(
-            r#"UPDATE wallet
-               SET name = $1, amount_amount = $2, amount_currency = $3
-               WHERE id = $4"#,
-            updated.name,
-            updated.amount.amount,
-            updated.amount.currency.as_str(),
-            updated.id
+            r#"UPDATE wallet SET name = $1 WHERE id = $2"#,
+            name,
+            wallet_id
         )
         .execute(&mut *self.tx)
         .await

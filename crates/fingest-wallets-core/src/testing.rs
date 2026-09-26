@@ -220,7 +220,7 @@ impl WalletReader for InMemoryStore {
 
 enum Op {
     InsertWallet { owner: String, wallet: Wallet },
-    UpdateWallet(Wallet),
+    RenameWallet { wallet_id: i32, name: String },
     DeleteWallet(i32),
     InsertExpense { wallet_id: i32, expense: Expense },
     UpdateExpense(Expense),
@@ -273,6 +273,14 @@ impl WalletTx for InMemoryTx {
         Ok(self.store.find_owned_now(login, wallet_id))
     }
 
+    async fn find_expense(
+        &mut self,
+        wallet_id: i32,
+        expense_id: i32,
+    ) -> Result<Option<Expense>, PortError> {
+        WalletReader::find_expense(&*self.store, wallet_id, expense_id).await
+    }
+
     async fn insert_wallet(&mut self, login: &str, wallet: &Wallet) -> Result<i32, PortError> {
         let id = self.store.next_wallet_id.fetch_add(1, Ordering::SeqCst);
         self.ops.push(Op::InsertWallet {
@@ -282,8 +290,11 @@ impl WalletTx for InMemoryTx {
         Ok(id)
     }
 
-    async fn update_wallet(&mut self, wallet: &Wallet) -> Result<u64, PortError> {
-        self.ops.push(Op::UpdateWallet(wallet.clone()));
+    async fn rename_wallet(&mut self, wallet_id: i32, name: &str) -> Result<u64, PortError> {
+        self.ops.push(Op::RenameWallet {
+            wallet_id,
+            name: name.to_owned(),
+        });
         Ok(1)
     }
 
@@ -314,8 +325,16 @@ impl WalletTx for InMemoryTx {
     }
 
     async fn update_expense(&mut self, expense: &Expense) -> Result<u64, PortError> {
+        let exists = self
+            .store
+            .expenses
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .any(|row| row.expense.id == expense.id);
+
         self.ops.push(Op::UpdateExpense(expense.clone()));
-        Ok(1)
+        Ok(u64::from(exists))
     }
 
     async fn delete_expense(&mut self, wallet_id: i32, expense_id: i32) -> Result<u64, PortError> {
@@ -355,9 +374,9 @@ impl WalletTx for InMemoryTx {
         for op in self.ops {
             match op {
                 Op::InsertWallet { owner, wallet } => wallets.push(OwnedWallet { owner, wallet }),
-                Op::UpdateWallet(updated) => {
-                    if let Some(row) = wallets.iter_mut().find(|r| r.wallet.id == updated.id) {
-                        row.wallet = updated;
+                Op::RenameWallet { wallet_id, name } => {
+                    if let Some(row) = wallets.iter_mut().find(|r| r.wallet.id == Some(wallet_id)) {
+                        row.wallet.name = name;
                     }
                 }
                 Op::DeleteWallet(id) => wallets.retain(|r| r.wallet.id != Some(id)),

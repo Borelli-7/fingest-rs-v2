@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox SET published_at = now() - interval '10 days'\n               WHERE payload->>'login' = 'old'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "306d7785115ba31de68c7181d3dce0fd8db5a592576262d43634ea249318e2d0"
+}
