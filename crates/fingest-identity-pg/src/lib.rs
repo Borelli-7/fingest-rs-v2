@@ -245,6 +245,19 @@ mod tests {
         assert!(logins.contains(&"user1".to_owned()));
     }
 
+    /// Migrations run in every environment, so none may leave a usable credential behind.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn migrations_leave_no_account_able_to_log_in(pool: PgPool) {
+        let with_password = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "count!" FROM account WHERE password IS NOT NULL"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(with_password, 0);
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn update_name_touches_only_the_named_field(pool: PgPool) {
         let repo = PgAccountRepository::new(pool);

@@ -128,6 +128,8 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D12 | `JWT_SECRET` under 32 chars | accepted | process refuses to start |
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
 | D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
+| D15 | `POST /api/auth/register` with `"admin": true` | creates an admin | field ignored; account is never admin |
+| D16 | `PUT .../wallets/{id}` with a different `amount.currency` | accepted, existing entries orphaned | 400 `CurrencyMismatch`; amount changes are recorded as `WalletBalanceAdjusted` |
 
 Two further fixes change no status code and so have no D-number:
 
@@ -153,10 +155,19 @@ EOF
 cargo run -p fingest-api
 ```
 
-Migrations run automatically at startup. The seeded development accounts are
-`admin`/`password123`, `user1`/`user123`, `user2`/`user456` — v1 stored these as plaintext
-while login used bcrypt, so **none of them could actually log in there**. The seed
-migration here stores bcrypt hashes, which is why it diverges byte-for-byte from v1's
+Migrations run automatically at startup. They seed demo accounts (`admin`, `user1`, `user2`)
+with sample wallets and budgets, but **no usable password**: migrations also run in
+production, so a later migration clears the published credentials. To log in locally —
+and for the Postman and JMeter suites — restore them explicitly:
+
+```bash
+psql "$DATABASE_URL" -f scripts/seed_dev_credentials.sql
+# admin/password123 (admin), user1/user123, user2/user456
+```
+
+Never run that script against a shared or production database. v1 stored these passwords
+as plaintext while login used bcrypt, so **none of them could actually log in there**. The
+seed migration here stores bcrypt hashes, which is why it diverges byte-for-byte from v1's
 copy: pointing this build at a database already migrated by v1 will fail sqlx's
 checksum validation, so use a fresh database.
 
@@ -185,7 +196,7 @@ Adapter tests use `#[sqlx::test]`, which provisions a throwaway database per tes
 tests need no database and no mocking framework — the port doubles are real in-memory
 implementations, and the fake `UnitOfWork` buffers writes until commit so rollback is testable.
 
-Contract and load suites:
+Contract and load suites (after `scripts/seed_dev_credentials.sql`):
 
 ```bash
 npx newman@6 run tests/postman_collection.json --env-var base_url=http://localhost:8080
