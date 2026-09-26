@@ -15,13 +15,36 @@ static ZERO: LazyLock<BigDecimal> = LazyLock::new(|| BigDecimal::from(0));
 /// expenses exceed deposits. Non-negativity is an *input* rule, enforced by callers via
 /// [`Money::require_non_negative`] at the same boundaries v1 applied `#[validate]`
 /// (wallet creation and expense input).
+///
+/// Deserialisation additionally enforces [`Money::require_storable`], so every amount that
+/// arrives over the wire is one the `NUMERIC(19,2)` columns can hold exactly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "MoneyRepr")]
 pub struct Money {
     pub amount: BigDecimal,
     pub currency: Currency,
 }
 
+#[derive(Deserialize)]
+struct MoneyRepr {
+    amount: BigDecimal,
+    currency: Currency,
+}
+
+impl TryFrom<MoneyRepr> for Money {
+    type Error = DomainError;
+
+    fn try_from(repr: MoneyRepr) -> Result<Self, Self::Error> {
+        let money = Self::new(repr.amount, repr.currency);
+        money.require_storable()?;
+        Ok(money)
+    }
+}
+
 impl Money {
+    /// Matches the `NUMERIC(19,2)` storage columns.
+    pub const MAX_SCALE: i64 = 2;
+    pub const MAX_INTEGER_DIGITS: u32 = 17;
     pub fn new(amount: BigDecimal, currency: Currency) -> Self {
         Self { amount, currency }
     }
@@ -52,6 +75,18 @@ impl Money {
     pub fn require_non_negative(&self) -> Result<(), DomainError> {
         if self.is_negative() {
             return Err(DomainError::NegativeAmount);
+        }
+        Ok(())
+    }
+
+    /// Rejects amounts Postgres would round (more than two decimals) or overflow. Without
+    /// this the stored value silently differed from the one echoed back and published.
+    pub fn require_storable(&self) -> Result<(), DomainError> {
+        let normalized = self.amount.normalized();
+        let limit = BigDecimal::from(10_i64.pow(Self::MAX_INTEGER_DIGITS));
+
+        if normalized.fractional_digit_count() > Self::MAX_SCALE || normalized.abs() >= limit {
+            return Err(DomainError::InvalidAmount(self.amount.to_string()));
         }
         Ok(())
     }
@@ -206,5 +241,36 @@ mod tests {
         let json = serde_json::to_value(pln(50)).unwrap();
         assert_eq!(json["currency"], "PLN");
         assert!(json.get("amount").is_some());
+    }
+
+    fn from_json(amount: &str) -> Result<Money, serde_json::Error> {
+        serde_json::from_str(&format!(r#"{{"amount":"{amount}","currency":"PLN"}}"#))
+    }
+
+    #[test]
+    fn two_decimal_places_are_accepted() {
+        assert_eq!(
+            from_json("10.55").unwrap().amount,
+            "10.55".parse::<BigDecimal>().unwrap()
+        );
+        assert!(from_json("10.500").is_ok(), "trailing zeros lose nothing");
+    }
+
+    #[test]
+    fn a_third_decimal_place_is_rejected_rather_than_rounded() {
+        let err = from_json("10.005").unwrap_err();
+        assert!(err.to_string().contains("Invalid amount"), "{err}");
+    }
+
+    #[test]
+    fn amounts_that_overflow_numeric_19_2_are_rejected() {
+        assert!(from_json("99999999999999999.99").is_ok());
+        assert!(from_json("100000000000000000").is_err());
+        assert!(from_json("-100000000000000000").is_err());
+    }
+
+    #[test]
+    fn deserialisation_still_validates_the_currency() {
+        assert!(serde_json::from_str::<Money>(r#"{"amount":"1","currency":"PLNX"}"#).is_err());
     }
 }

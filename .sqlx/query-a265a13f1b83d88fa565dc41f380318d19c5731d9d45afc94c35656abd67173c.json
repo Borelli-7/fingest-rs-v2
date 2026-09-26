@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_wallet (account_login, wallet_id) VALUES ($1, 9200), ($1, 9201)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a265a13f1b83d88fa565dc41f380318d19c5731d9d45afc94c35656abd67173c"
+}

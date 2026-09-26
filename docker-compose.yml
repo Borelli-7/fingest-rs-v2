@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: moneymanager
     ports:
-      - "5432:5432"
+      # Loopback only: the api reaches the db over the compose network, and a host-side
+      # `cargo run` over localhost. Publishing on 0.0.0.0 exposed Postgres to the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

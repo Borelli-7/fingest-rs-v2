@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM wallet\n               WHERE id IN (\n                   SELECT aw.wallet_id FROM account_wallet aw\n                   WHERE aw.account_login = $1\n                     AND NOT EXISTS (\n                         SELECT 1 FROM account_wallet other\n                         WHERE other.wallet_id = aw.wallet_id\n                           AND other.account_login <> $1\n                     )\n               )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1667b00b927da5f869e400f0b34a222a724c6952792a906dc781df6038b688a"
+}
