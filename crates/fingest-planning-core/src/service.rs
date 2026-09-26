@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fingest_kernel::{CategoryRef, Clock, DateRange, Money};
+use fingest_kernel::{CategoryRef, Clock, DateRange, DomainEvent, EventEnvelope, Money};
 
 use crate::{
     budget::{Budget, BudgetWithSpent},
@@ -90,10 +90,17 @@ impl BudgetService {
         let budget = Budget::new(category, total, date_range)?;
         self.require_category(&budget.category).await?;
 
-        let id = self
-            .budgets
-            .insert(login, &budget, self.clock.now_utc())
-            .await?;
+        let at = self.clock.now_utc();
+        let events = |budget_id| {
+            EventEnvelope::for_all(
+                &[DomainEvent::BudgetCreated {
+                    login: login.to_owned(),
+                    budget_id,
+                }],
+                at,
+            )
+        };
+        let id = self.budgets.insert(login, &budget, &events).await?;
 
         Ok(budget.with_id(id))
     }
@@ -118,7 +125,11 @@ impl BudgetService {
 
         self.require_category(&updated.category).await?;
 
-        if self.budgets.update(&updated).await? == 0 {
+        let events = self.envelopes(DomainEvent::BudgetUpdated {
+            login: login.to_owned(),
+            budget_id,
+        })?;
+        if self.budgets.update(&updated, &events).await? == 0 {
             return Err(PlanningError::budget_not_found(budget_id));
         }
 
@@ -129,11 +140,19 @@ impl BudgetService {
         self.require_user(login).await?;
         self.require_owned(login, budget_id, "delete").await?;
 
-        if self.budgets.delete(budget_id).await? == 0 {
+        let events = self.envelopes(DomainEvent::BudgetDeleted {
+            login: login.to_owned(),
+            budget_id,
+        })?;
+        if self.budgets.delete(budget_id, &events).await? == 0 {
             return Err(PlanningError::budget_not_found(budget_id));
         }
 
         Ok(())
+    }
+
+    fn envelopes(&self, event: DomainEvent) -> Result<Vec<EventEnvelope>, PlanningError> {
+        Ok(EventEnvelope::for_all(&[event], self.clock.now_utc())?)
     }
 }
 
@@ -279,6 +298,7 @@ mod tests {
 
         assert_eq!(updated.total, pln(750));
         assert_eq!(updated.category, food(), "untouched fields are preserved");
+        assert_eq!(repo.event_types(), vec!["BudgetCreated", "BudgetUpdated"]);
     }
 
     #[test]
@@ -316,6 +336,7 @@ mod tests {
         block_on(svc.delete(OWNER, created.id.unwrap())).unwrap();
 
         assert_eq!(repo.len(), 0);
+        assert_eq!(repo.event_types(), vec!["BudgetCreated", "BudgetDeleted"]);
     }
 
     #[test]
@@ -328,5 +349,6 @@ mod tests {
 
         assert_eq!(err, PlanningError::not_owner("delete"));
         assert_eq!(repo.len(), 1);
+        assert_eq!(repo.event_types(), vec!["BudgetCreated"], "nothing emitted");
     }
 }

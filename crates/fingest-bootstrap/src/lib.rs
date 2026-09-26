@@ -99,8 +99,12 @@ impl Dependencies {
                 hasher,
                 issuer,
                 Arc::clone(&verifier),
+                Arc::clone(&clock_for_wallets),
             )),
-            user_service: web::Data::new(UserService::new(accounts)),
+            user_service: web::Data::new(UserService::new(
+                accounts,
+                Arc::clone(&clock_for_wallets),
+            )),
             wallet_service: web::Data::new(WalletService::new(
                 wallet_reader,
                 wallet_uow,

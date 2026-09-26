@@ -76,7 +76,7 @@ mod tests {
     use crate::{json_config::json_config_plain, resources::user_routes};
     use actix_web::{App, http::StatusCode, test};
     use fingest_contracts::ErrorResponse;
-    use fingest_identity_core::testing::{FakeTokens, InMemoryAccountRepository};
+    use fingest_identity_core::testing::{FakeTokens, InMemoryAccountRepository, fixed_clock};
     use fingest_identity_core::{Account, AccountRepository, TokenVerifier};
     use std::sync::Arc;
 
@@ -88,7 +88,7 @@ mod tests {
         for (login, admin) in [("root", true), ("bob", false), ("alice", false)] {
             let account = Account::new(login, Some("First".into()), Some("Last".into()), admin)
                 .expect("valid fixture");
-            repo.insert(&account, "hash").await.unwrap();
+            repo.insert(&account, "hash", &[]).await.unwrap();
         }
         repo
     }
@@ -98,7 +98,7 @@ mod tests {
             let verifier: Arc<dyn TokenVerifier> = Arc::new(FakeTokens);
             test::init_service(
                 App::new()
-                    .app_data(web::Data::new(UserService::new($repo)))
+                    .app_data(web::Data::new(UserService::new($repo, fixed_clock())))
                     .app_data(json_config_plain())
                     .configure(|cfg| user_routes(cfg, verifier.clone())),
             )

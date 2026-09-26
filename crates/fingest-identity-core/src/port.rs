@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use fingest_kernel::PortError;
+use fingest_kernel::{EventEnvelope, PortError};
 use thiserror::Error;
 
 use crate::{
@@ -20,7 +20,13 @@ pub trait AccountRepository: Send + Sync {
 
     async fn exists(&self, login: &str) -> Result<bool, PortError>;
 
-    async fn insert(&self, account: &Account, password_hash: &str) -> Result<Account, PortError>;
+    /// Inserts the account and `events` in one transaction.
+    async fn insert(
+        &self,
+        account: &Account,
+        password_hash: &str,
+        events: &[EventEnvelope],
+    ) -> Result<Account, PortError>;
 
     async fn list(&self) -> Result<Vec<Account>, PortError>;
 
@@ -33,7 +39,8 @@ pub trait AccountRepository: Send + Sync {
         value: &str,
     ) -> Result<u64, PortError>;
 
-    async fn delete(&self, login: &str) -> Result<u64, PortError>;
+    /// Writes `events` only if the account was deleted, atomically with the delete.
+    async fn delete(&self, login: &str, events: &[EventEnvelope]) -> Result<u64, PortError>;
 }
 
 /// Sync: hashing is CPU-bound, not I/O.

@@ -14,6 +14,6 @@ pub mod testing;
 
 pub use budget::{Budget, BudgetWithSpent};
 pub use error::PlanningError;
-pub use port::{BudgetRepository, SavingRepository};
+pub use port::{BudgetRepository, EventsForId, SavingRepository};
 pub use saving::Saving;
 pub use service::{BudgetPatch, BudgetService};

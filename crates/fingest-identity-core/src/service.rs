@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use fingest_kernel::{Clock, DomainEvent, EventEnvelope};
+
 use crate::{
     account::{Account, Password, StoredAccount},
     claims::Claims,
@@ -20,6 +22,7 @@ pub struct AuthService {
     hasher: Arc<dyn PasswordHasher>,
     issuer: Arc<dyn TokenIssuer>,
     verifier: Arc<dyn TokenVerifier>,
+    clock: Arc<dyn Clock>,
 }
 
 impl AuthService {
@@ -28,12 +31,14 @@ impl AuthService {
         hasher: Arc<dyn PasswordHasher>,
         issuer: Arc<dyn TokenIssuer>,
         verifier: Arc<dyn TokenVerifier>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             accounts,
             hasher,
             issuer,
             verifier,
+            clock,
         }
     }
 
@@ -52,7 +57,14 @@ impl AuthService {
         }
 
         let hash = self.hasher.hash(&password)?;
-        Ok(self.accounts.insert(&account, &hash).await?)
+        let events = EventEnvelope::for_all(
+            &[DomainEvent::AccountRegistered {
+                login: account.login.clone(),
+                admin: account.admin,
+            }],
+            self.clock.now_utc(),
+        )?;
+        Ok(self.accounts.insert(&account, &hash, &events).await?)
     }
 
     pub async fn login(
@@ -107,12 +119,12 @@ impl AuthService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{CountingHasher, FakeTokens, InMemoryAccountRepository};
+    use crate::testing::{CountingHasher, FakeTokens, InMemoryAccountRepository, fixed_clock};
     use futures_executor::block_on;
 
     fn service(repo: Arc<InMemoryAccountRepository>, hasher: Arc<CountingHasher>) -> AuthService {
         let tokens = Arc::new(FakeTokens);
-        AuthService::new(repo, hasher, tokens.clone(), tokens)
+        AuthService::new(repo, hasher, tokens.clone(), tokens, fixed_clock())
     }
 
     fn new_account(login: &str, password: &str) -> NewAccount {
@@ -136,6 +148,7 @@ mod tests {
         let hash = stored.password_hash.unwrap();
         assert_ne!(hash, "correct-horse");
         assert!(hash.starts_with("hashed:"));
+        assert_eq!(repo.event_types(), vec!["AccountRegistered"]);
     }
 
     #[test]

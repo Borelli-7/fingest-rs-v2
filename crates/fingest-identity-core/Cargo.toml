@@ -12,6 +12,7 @@ fingest-kernel = { path = "../fingest-kernel" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 
 [features]
 test-support = []

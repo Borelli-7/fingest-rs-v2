@@ -147,6 +147,12 @@ impl WalletService {
 
         let mut tx = self.unit_of_work.begin().await?;
         tx.update_wallet(&wallet).await?;
+        let events = [DomainEvent::WalletUpdated {
+            login: login.to_owned(),
+            wallet_id,
+        }];
+        tx.append_events(&envelopes(&events, self.clock.now_utc())?)
+            .await?;
         tx.commit().await?;
 
         Ok(wallet)
@@ -161,6 +167,12 @@ impl WalletService {
         if tx.delete_wallet(wallet_id).await? == 0 {
             return Err(WalletsError::wallet_not_found(wallet_id));
         }
+        let events = [DomainEvent::WalletDeleted {
+            login: login.to_owned(),
+            wallet_id,
+        }];
+        tx.append_events(&envelopes(&events, self.clock.now_utc())?)
+            .await?;
         tx.commit().await?;
 
         Ok(())
@@ -487,6 +499,33 @@ mod tests {
     }
 
     // --- record_expense ---
+
+    #[test]
+    fn updating_a_wallet_emits_wallet_updated() {
+        let store = store();
+
+        block_on(service(Arc::clone(&store)).update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: Some("Daily".into()),
+                amount: None,
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(store.recorded_events(), vec!["WalletUpdated"]);
+    }
+
+    #[test]
+    fn deleting_a_wallet_emits_wallet_deleted() {
+        let store = store();
+
+        block_on(service(Arc::clone(&store)).delete_wallet(OWNER, WALLET)).unwrap();
+
+        assert_eq!(store.wallet_count(), 0);
+        assert_eq!(store.recorded_events(), vec!["WalletDeleted"]);
+    }
 
     #[test]
     fn recording_spending_moves_the_balance_in_one_transaction() {

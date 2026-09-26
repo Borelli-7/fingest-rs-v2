@@ -12,7 +12,18 @@ pub enum DomainEvent {
         login: String,
         admin: bool,
     },
+    AccountDeleted {
+        login: String,
+    },
     WalletCreated {
+        login: String,
+        wallet_id: i32,
+    },
+    WalletUpdated {
+        login: String,
+        wallet_id: i32,
+    },
+    WalletDeleted {
         login: String,
         wallet_id: i32,
     },
@@ -40,19 +51,31 @@ pub enum DomainEvent {
         login: String,
         budget_id: i32,
     },
+    BudgetUpdated {
+        login: String,
+        budget_id: i32,
+    },
+    BudgetDeleted {
+        login: String,
+        budget_id: i32,
+    },
 }
 
 impl DomainEvent {
     /// Outbox `aggregate` column.
     pub fn aggregate(&self) -> &'static str {
         match self {
-            Self::AccountRegistered { .. } => "account",
+            Self::AccountRegistered { .. } | Self::AccountDeleted { .. } => "account",
             Self::WalletCreated { .. }
+            | Self::WalletUpdated { .. }
+            | Self::WalletDeleted { .. }
             | Self::WalletBalanceAdjusted { .. }
             | Self::ExpenseRecorded { .. }
             | Self::ExpenseUpdated { .. }
             | Self::ExpenseRemoved { .. } => "wallet",
-            Self::BudgetCreated { .. } => "budget",
+            Self::BudgetCreated { .. }
+            | Self::BudgetUpdated { .. }
+            | Self::BudgetDeleted { .. } => "budget",
         }
     }
 
@@ -60,12 +83,17 @@ impl DomainEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::AccountRegistered { .. } => "AccountRegistered",
+            Self::AccountDeleted { .. } => "AccountDeleted",
             Self::WalletCreated { .. } => "WalletCreated",
+            Self::WalletUpdated { .. } => "WalletUpdated",
+            Self::WalletDeleted { .. } => "WalletDeleted",
             Self::ExpenseRecorded { .. } => "ExpenseRecorded",
             Self::ExpenseUpdated { .. } => "ExpenseUpdated",
             Self::ExpenseRemoved { .. } => "ExpenseRemoved",
             Self::WalletBalanceAdjusted { .. } => "WalletBalanceAdjusted",
             Self::BudgetCreated { .. } => "BudgetCreated",
+            Self::BudgetUpdated { .. } => "BudgetUpdated",
+            Self::BudgetDeleted { .. } => "BudgetDeleted",
         }
     }
 }
@@ -90,6 +118,16 @@ impl EventEnvelope {
             payload: serde_json::to_value(event).map_err(|e| PortError::Encoding(e.to_string()))?,
             occurred_at,
         })
+    }
+
+    pub fn for_all(
+        events: &[DomainEvent],
+        occurred_at: DateTime<Utc>,
+    ) -> Result<Vec<Self>, PortError> {
+        events
+            .iter()
+            .map(|event| Self::new(event, occurred_at))
+            .collect()
     }
 }
 
