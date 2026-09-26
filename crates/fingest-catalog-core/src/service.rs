@@ -1,6 +1,17 @@
 use std::sync::Arc;
 
+use fingest_kernel::PortError;
+
 use crate::{category::Category, error::CatalogError, port::CategoryRepository};
+
+/// The duplicate check above is advisory; the storage constraint is authoritative. A
+/// concurrent writer that wins the race surfaces here, and gets the same v1 message.
+fn lost_race(err: PortError, name: &str, profit: bool) -> CatalogError {
+    match err {
+        PortError::Conflict(_) => CatalogError::already_exists(name, profit),
+        other => other.into(),
+    }
+}
 
 /// Catalog use cases.
 ///
@@ -31,7 +42,10 @@ impl CategoryService {
             return Err(CatalogError::already_exists(&category.name, profit));
         }
 
-        Ok(self.repository.insert(&category).await?)
+        self.repository
+            .insert(&category)
+            .await
+            .map_err(|e| lost_race(e, &category.name, profit))
     }
 
     pub async fn rename(
@@ -55,7 +69,10 @@ impl CategoryService {
             return Err(CatalogError::already_exists(&renamed.name, profit));
         }
 
-        Ok(self.repository.rename(name, profit, &renamed.name).await?)
+        self.repository
+            .rename(name, profit, &renamed.name)
+            .await
+            .map_err(|e| lost_race(e, &renamed.name, profit))
     }
 
     pub async fn delete(&self, name: &str, profit: bool) -> Result<(), CatalogError> {

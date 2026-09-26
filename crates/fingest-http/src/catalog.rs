@@ -72,7 +72,8 @@ mod tests {
     use actix_web::{App, http::StatusCode, test};
     use fingest_catalog_core::testing::InMemoryCategoryRepository;
     use fingest_contracts::ErrorResponse;
-    use fingest_identity_core::{TokenVerifier, testing::FakeTokens};
+    use fingest_identity_core::TokenVerifier;
+    use fingest_identity_core::testing::{FakeTokens, InMemoryAccountRepository, auth_service};
     use std::sync::Arc;
 
     const ADMIN: (&str, &str) = ("Authorization", "Bearer token-for-root-admin=true");
@@ -82,10 +83,15 @@ mod tests {
     macro_rules! app_with {
         ($repo:expr) => {{
             let verifier: Arc<dyn TokenVerifier> = Arc::new(FakeTokens);
+            let accounts = Arc::new(InMemoryAccountRepository::with_accounts(&[
+                ("root", true),
+                ("bob", false),
+            ]));
             test::init_service(
                 App::new()
                     .app_data(web::Data::new(CategoryService::new($repo)))
                     .app_data(web::Data::new(TokenVerifierRef(verifier)))
+                    .app_data(web::Data::new(auth_service(accounts)))
                     .app_data(json_config_plain())
                     .configure(category_routes),
             )

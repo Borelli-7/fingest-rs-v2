@@ -600,11 +600,13 @@ dependencies = [
 name = "fingest-auth-jwt"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bcrypt",
  "chrono",
  "fingest-identity-core",
  "fingest-kernel",
  "jsonwebtoken",
+ "tokio",
 ]
 
 [[package]]
@@ -684,6 +686,8 @@ version = "0.1.0"
 dependencies = [
  "actix-rt",
  "actix-web",
+ "bigdecimal",
+ "chrono",
  "fingest-catalog-core",
  "fingest-contracts",
  "fingest-identity-core",
@@ -700,6 +704,7 @@ name = "fingest-identity-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "fingest-kernel",
  "futures-executor",
  "serde",

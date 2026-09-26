@@ -1,22 +1,31 @@
 //! In-memory doubles for identity use-case tests.
 
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
-use fingest_kernel::PortError;
+use fingest_kernel::{Clock, EventEnvelope, FixedClock, PortError};
 
 use crate::{
     account::{Account, NameField, Password, StoredAccount},
     claims::Claims,
     port::{AccountRepository, PasswordHasher, TokenError, TokenIssuer, TokenVerifier},
+    service::AuthService,
 };
+
+/// A clock pinned to an arbitrary instant, so event timestamps are deterministic.
+pub fn fixed_clock() -> Arc<dyn Clock> {
+    Arc::new(FixedClock(
+        chrono::DateTime::from_timestamp(1_700_000_000, 0).expect("valid fixture timestamp"),
+    ))
+}
 
 #[derive(Default)]
 pub struct InMemoryAccountRepository {
     rows: Mutex<Vec<StoredAccount>>,
+    events: Mutex<Vec<EventEnvelope>>,
 }
 
 impl InMemoryAccountRepository {
@@ -31,6 +40,23 @@ impl InMemoryAccountRepository {
                 account: Account::new(login, None, None, false).expect("valid fixture"),
                 password_hash: None,
             }]),
+            events: Mutex::default(),
+        }
+    }
+
+    /// Accounts with the given admin flags and a placeholder hash.
+    pub fn with_accounts(accounts: &[(&str, bool)]) -> Self {
+        Self {
+            rows: Mutex::new(
+                accounts
+                    .iter()
+                    .map(|(login, admin)| StoredAccount {
+                        account: Account::new(*login, None, None, *admin).expect("valid fixture"),
+                        password_hash: Some("hash".to_owned()),
+                    })
+                    .collect(),
+            ),
+            events: Mutex::default(),
         }
     }
 
@@ -40,6 +66,15 @@ impl InMemoryAccountRepository {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn event_types(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|e| e.event_type.clone())
+            .collect()
     }
 }
 
@@ -64,7 +99,12 @@ impl AccountRepository for InMemoryAccountRepository {
             .any(|row| row.account.login == login))
     }
 
-    async fn insert(&self, account: &Account, password_hash: &str) -> Result<Account, PortError> {
+    async fn insert(
+        &self,
+        account: &Account,
+        password_hash: &str,
+        events: &[EventEnvelope],
+    ) -> Result<Account, PortError> {
         self.rows
             .lock()
             .expect("lock poisoned")
@@ -72,6 +112,10 @@ impl AccountRepository for InMemoryAccountRepository {
                 account: account.clone(),
                 password_hash: Some(password_hash.to_owned()),
             });
+        self.events
+            .lock()
+            .expect("lock poisoned")
+            .extend_from_slice(events);
         Ok(account.clone())
     }
 
@@ -103,12 +147,31 @@ impl AccountRepository for InMemoryAccountRepository {
         Ok(1)
     }
 
-    async fn delete(&self, login: &str) -> Result<u64, PortError> {
+    async fn delete(&self, login: &str, events: &[EventEnvelope]) -> Result<u64, PortError> {
         let mut rows = self.rows.lock().expect("lock poisoned");
         let before = rows.len();
         rows.retain(|row| row.account.login != login);
-        Ok((before - rows.len()) as u64)
+        let deleted = (before - rows.len()) as u64;
+        if deleted > 0 {
+            self.events
+                .lock()
+                .expect("lock poisoned")
+                .extend_from_slice(events);
+        }
+        Ok(deleted)
     }
+}
+
+/// An `AuthService` over `accounts`, wired with the fake hasher and tokens.
+pub fn auth_service(accounts: Arc<InMemoryAccountRepository>) -> AuthService {
+    let tokens = Arc::new(FakeTokens);
+    AuthService::new(
+        accounts,
+        Arc::new(CountingHasher::new()),
+        tokens.clone(),
+        tokens,
+        fixed_clock(),
+    )
 }
 
 /// Reversible stand-in for bcrypt that also records how often it was asked to verify,
@@ -128,18 +191,19 @@ impl CountingHasher {
     }
 }
 
+#[async_trait]
 impl PasswordHasher for CountingHasher {
-    fn hash(&self, password: &Password) -> Result<String, PortError> {
+    async fn hash(&self, password: &Password) -> Result<String, PortError> {
         Ok(format!("hashed:{}", password.expose()))
     }
 
-    fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
+    async fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
         self.verifications.fetch_add(1, Ordering::SeqCst);
         Ok(hash == format!("hashed:{password}"))
     }
 
-    fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
-        self.verify(password, "hashed:$never$")?;
+    async fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
+        self.verify(password, "hashed:$never$").await?;
         Ok(())
     }
 }

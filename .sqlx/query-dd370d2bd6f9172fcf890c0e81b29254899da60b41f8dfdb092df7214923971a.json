@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM outbox\n               WHERE published_at IS NOT NULL\n                 AND published_at < now() - make_interval(secs => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dd370d2bd6f9172fcf890c0e81b29254899da60b41f8dfdb092df7214923971a"
+}

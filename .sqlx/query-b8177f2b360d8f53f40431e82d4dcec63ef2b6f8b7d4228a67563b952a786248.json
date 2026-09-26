@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox SET claimed_until = now() - interval '1 second'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b8177f2b360d8f53f40431e82d4dcec63ef2b6f8b7d4228a67563b952a786248"
+}

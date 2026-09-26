@@ -24,6 +24,9 @@ actix-rt = "2.10"
 fingest-catalog-core = { path = "../fingest-catalog-core", features = ["test-support"] }
 fingest-identity-core = { path = "../fingest-identity-core", features = ["test-support"] }
 fingest-wallets-core = { path = "../fingest-wallets-core", features = ["test-support"] }
+fingest-planning-core = { path = "../fingest-planning-core", features = ["test-support"] }
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true

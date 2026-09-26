@@ -17,6 +17,8 @@ pub enum ApiError {
     Forbidden(String),
     NotFound(String),
     Conflict(String),
+    /// Message plus the seconds to put in `Retry-After`.
+    TooManyRequests(String, u64),
     Internal(String),
 }
 
@@ -28,6 +30,7 @@ impl ApiError {
             | Self::Forbidden(m)
             | Self::NotFound(m)
             | Self::Conflict(m)
+            | Self::TooManyRequests(m, _)
             | Self::Internal(m) => m,
         }
     }
@@ -47,13 +50,18 @@ impl ResponseError for ApiError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::TooManyRequests(..) => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     fn error_response(&self) -> HttpResponse {
         let status = self.status_code();
-        HttpResponse::build(status).json(ErrorResponse::new(status.as_u16(), self.message()))
+        let mut response = HttpResponse::build(status);
+        if let Self::TooManyRequests(_, retry_after) = self {
+            response.insert_header(("Retry-After", retry_after.to_string()));
+        }
+        response.json(ErrorResponse::new(status.as_u16(), self.message()))
     }
 }
 
@@ -154,6 +162,10 @@ mod tests {
             (ApiError::Forbidden("x".into()), S::FORBIDDEN),
             (ApiError::NotFound("x".into()), S::NOT_FOUND),
             (ApiError::Conflict("x".into()), S::CONFLICT),
+            (
+                ApiError::TooManyRequests("x".into(), 1),
+                S::TOO_MANY_REQUESTS,
+            ),
             (ApiError::Internal("x".into()), S::INTERNAL_SERVER_ERROR),
         ];
         for (err, expected) in cases {

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, aggregate, event_type, payload, occurred_at\n               FROM outbox\n               WHERE published_at IS NULL\n               ORDER BY id\n               LIMIT $1",
+  "query": "UPDATE outbox\n               SET claimed_until = now() + make_interval(secs => $2)\n               WHERE id IN (\n                   SELECT id FROM outbox\n                   WHERE published_at IS NULL\n                     AND (claimed_until IS NULL OR claimed_until < now())\n                   ORDER BY id\n                   LIMIT $1\n                   FOR UPDATE SKIP LOCKED\n               )\n               RETURNING id, aggregate, event_type, payload, occurred_at",
   "describe": {
     "columns": [
       {
@@ -31,7 +31,8 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Float8"
       ]
     },
     "nullable": [
@@ -42,5 +43,5 @@
       false
     ]
   },
-  "hash": "1f1c0c45225a0ef72eeccb89e5aa413ca324c218d0cab94c9b83b1a085a3d809"
+  "hash": "296f6f42ee63d277722f155c31a2ba37e1af74aedf2338ed47d467130bbbd070"
 }

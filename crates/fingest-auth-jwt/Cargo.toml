@@ -13,6 +13,8 @@ fingest-identity-core = { path = "../fingest-identity-core" }
 jsonwebtoken = { workspace = true }
 bcrypt = { workspace = true }
 chrono = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

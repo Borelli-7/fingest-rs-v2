@@ -58,7 +58,8 @@ between 403 and 404.
   `UnitOfWork` that buffers writes until `commit`, which is what makes rollback testable
   without a database.
 - The split is currently only in the wallets context, because it is the only one with a
-  multi-statement invariant. `fingest-planning-pg` keeps a single repository trait and
-  builds its `BudgetCreated` event inside the adapter, since the budget id does not exist
-  until the row is written. That inconsistency is deliberate and documented at
-  `BudgetRepository::insert`.
+  multi-statement invariant. The identity and planning repositories keep a single trait
+  whose write methods take the core-built outbox envelopes and persist them in the same
+  transaction. `BudgetRepository::insert` takes a closure instead of a slice, because the
+  `BudgetCreated` event carries an id that only exists once the row is written; the core
+  still decides what is emitted.

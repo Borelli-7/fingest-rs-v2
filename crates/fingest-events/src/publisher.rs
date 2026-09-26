@@ -31,10 +31,13 @@ impl Default for InProcessPublisher {
 
 #[async_trait]
 impl EventPublisher for InProcessPublisher {
+    /// With no subscriber the events would reach nobody, yet the relay would mark them
+    /// delivered. Failing keeps them pending until a subscriber is attached.
     async fn publish(&self, events: &[EventEnvelope]) -> Result<(), PortError> {
         for event in events {
-            // An error here only means nobody is listening, which is not a failure.
-            let _ = self.sender.send(event.clone());
+            self.sender.send(event.clone()).map_err(|_| {
+                PortError::Unavailable("no in-process subscriber is attached".to_owned())
+            })?;
         }
         Ok(())
     }

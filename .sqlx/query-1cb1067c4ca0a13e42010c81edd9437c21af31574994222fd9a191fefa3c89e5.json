@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO wallet (id, name, amount_amount, amount_currency)\n               VALUES (9002, 'Test Wallet', 100.00, 'USD')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "1cb1067c4ca0a13e42010c81edd9437c21af31574994222fd9a191fefa3c89e5"
+}

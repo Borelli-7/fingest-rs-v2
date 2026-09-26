@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use fingest_kernel::PortError;
+use fingest_kernel::{EventEnvelope, PortError};
 use thiserror::Error;
 
 use crate::{
@@ -20,7 +20,13 @@ pub trait AccountRepository: Send + Sync {
 
     async fn exists(&self, login: &str) -> Result<bool, PortError>;
 
-    async fn insert(&self, account: &Account, password_hash: &str) -> Result<Account, PortError>;
+    /// Inserts the account and `events` in one transaction.
+    async fn insert(
+        &self,
+        account: &Account,
+        password_hash: &str,
+        events: &[EventEnvelope],
+    ) -> Result<Account, PortError>;
 
     async fn list(&self) -> Result<Vec<Account>, PortError>;
 
@@ -33,19 +39,22 @@ pub trait AccountRepository: Send + Sync {
         value: &str,
     ) -> Result<u64, PortError>;
 
-    async fn delete(&self, login: &str) -> Result<u64, PortError>;
+    /// Writes `events` only if the account was deleted, atomically with the delete.
+    async fn delete(&self, login: &str, events: &[EventEnvelope]) -> Result<u64, PortError>;
 }
 
-/// Sync: hashing is CPU-bound, not I/O.
+/// Async so an adapter can move CPU-bound hashing off the request executor; a synchronous
+/// bcrypt call inside a handler stalls every other request on that worker.
+#[async_trait]
 pub trait PasswordHasher: Send + Sync {
-    fn hash(&self, password: &Password) -> Result<String, PortError>;
+    async fn hash(&self, password: &Password) -> Result<String, PortError>;
 
-    fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError>;
+    async fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError>;
 
     /// Runs a verification against a fixed hash so that a login for a non-existent account
     /// costs the same as one with a wrong password. Without this, response latency reveals
     /// which logins exist.
-    fn verify_dummy(&self, password: &str) -> Result<(), PortError>;
+    async fn verify_dummy(&self, password: &str) -> Result<(), PortError>;
 }
 
 pub trait TokenIssuer: Send + Sync {

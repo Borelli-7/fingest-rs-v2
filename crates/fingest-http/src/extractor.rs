@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use actix_web::{FromRequest, HttpMessage, HttpRequest, dev::Payload};
-use fingest_identity_core::{Claims, TokenVerifier};
+use actix_web::{FromRequest, HttpMessage, HttpRequest, dev::Payload, web};
+use fingest_identity_core::{AuthService, Claims, TokenVerifier};
 
 use crate::error::ApiError;
 
@@ -18,12 +18,14 @@ pub fn bearer_token(req: &HttpRequest) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
-/// Proof that the caller presented a valid token.
+/// Proof that the caller presented a valid token *and* that the account behind it still
+/// exists.
 ///
 /// A handler that needs identity must ask for it, so protection cannot be lost by
 /// mis-configuring a path list. Works whether or not [`crate::middleware::JwtAuth`] ran:
 /// claims already in the request extensions are reused, otherwise the header is verified
-/// here.
+/// here. The admin flag is taken from the stored account, not the token, so revoking it
+/// takes effect immediately.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser(pub Claims);
 
@@ -59,25 +61,36 @@ impl AuthenticatedUser {
 
 impl FromRequest for AuthenticatedUser {
     type Error = ApiError;
-    type Future = std::future::Ready<Result<Self, ApiError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, ApiError>>>>;
 
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        std::future::ready(authenticate(req))
+        let req = req.clone();
+        Box::pin(async move {
+            let claims = verified_claims(&req)?;
+            let auth = req
+                .app_data::<web::Data<AuthService>>()
+                .cloned()
+                .ok_or_else(|| wiring_error("AuthService"))?;
+
+            Ok(AuthenticatedUser(auth.current_principal(claims).await?))
+        })
     }
 }
 
-fn authenticate(req: &HttpRequest) -> Result<AuthenticatedUser, ApiError> {
+/// Wiring bug, not a client error: fail closed and make it loud.
+fn wiring_error(missing: &str) -> ApiError {
+    tracing::error!(missing, "required app_data is not registered");
+    ApiError::Internal("Internal server error".to_owned())
+}
+
+fn verified_claims(req: &HttpRequest) -> Result<Claims, ApiError> {
     if let Some(claims) = req.extensions().get::<Claims>().cloned() {
-        return Ok(AuthenticatedUser(claims));
+        return Ok(claims);
     }
 
     let verifier = req
-        .app_data::<actix_web::web::Data<TokenVerifierRef>>()
-        .ok_or_else(|| {
-            // Wiring bug, not a client error: fail closed and make it loud.
-            tracing::error!("TokenVerifierRef is not registered in app_data");
-            ApiError::Internal("Internal server error".to_owned())
-        })?;
+        .app_data::<web::Data<TokenVerifierRef>>()
+        .ok_or_else(|| wiring_error("TokenVerifierRef"))?;
 
     let token = bearer_token(req)
         .ok_or_else(|| ApiError::Unauthenticated("Missing Authorization header".to_owned()))?;
@@ -85,7 +98,6 @@ fn authenticate(req: &HttpRequest) -> Result<AuthenticatedUser, ApiError> {
     verifier
         .0
         .verify(token)
-        .map(AuthenticatedUser)
         .map_err(|e| ApiError::Unauthenticated(e.to_string()))
 }
 

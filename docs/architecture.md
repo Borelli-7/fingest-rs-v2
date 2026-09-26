@@ -486,14 +486,8 @@ Environment variables and their defaults are listed under
 
 ## Deliberate deviations
 
-Three places where the code does not follow the pattern the rest of the system uses. Each is
+Two places where the code does not follow the pattern the rest of the system uses. Each is
 intentional; changing them would cost more than the consistency is worth.
-
-**`fingest-planning-pg` builds its own event.** Everywhere else the aggregate constructs the
-`DomainEvent` and the transaction port just appends it. `BudgetRepository::insert` instead
-takes an `occurred_at` and builds `BudgetCreated` inside the adapter, because the budget id
-does not exist until the row is written and the event must carry it. The timestamp is still
-supplied by the caller, so it still comes from the injected `Clock`. Documented at the trait.
 
 **`saving` is modelled, persisted and unrouted.** `SavingRepository` and the `saving` table
 exist; no HTTP route reaches them. This matches v1's surface, and
