@@ -128,18 +128,19 @@ impl CountingHasher {
     }
 }
 
+#[async_trait]
 impl PasswordHasher for CountingHasher {
-    fn hash(&self, password: &Password) -> Result<String, PortError> {
+    async fn hash(&self, password: &Password) -> Result<String, PortError> {
         Ok(format!("hashed:{}", password.expose()))
     }
 
-    fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
+    async fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
         self.verifications.fetch_add(1, Ordering::SeqCst);
         Ok(hash == format!("hashed:{password}"))
     }
 
-    fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
-        self.verify(password, "hashed:$never$")?;
+    async fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
+        self.verify(password, "hashed:$never$").await?;
         Ok(())
     }
 }
