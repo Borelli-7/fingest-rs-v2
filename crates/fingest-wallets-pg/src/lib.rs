@@ -229,6 +229,46 @@ mod tests {
         );
     }
 
+    /// A rename racing an uncommitted balance change must wait for it and must not write
+    /// the stale balance back.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_rename_does_not_overwrite_a_concurrent_balance_change(pool: PgPool) {
+        use fingest_kernel::SystemClock;
+        use fingest_wallets_core::{WalletPatch, WalletService};
+        use std::sync::Arc;
+
+        let wallet_id = seed_wallet(&pool, 100).await;
+        let uow = PgUnitOfWork::new(pool.clone());
+
+        let mut spending = uow.begin().await.unwrap();
+        spending.find_owned(OWNER, wallet_id).await.unwrap();
+        spending.adjust_balance(wallet_id, &pln(-30)).await.unwrap();
+
+        let service = WalletService::new(
+            Arc::new(PgWalletReader::new(pool.clone())),
+            Arc::new(PgUnitOfWork::new(pool.clone())),
+            Arc::new(SystemClock),
+        );
+        let rename = tokio::spawn(async move {
+            service
+                .update_wallet(
+                    OWNER,
+                    wallet_id,
+                    WalletPatch {
+                        name: Some("Daily".into()),
+                        amount: None,
+                    },
+                )
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        spending.commit().await.unwrap();
+        rename.await.unwrap().unwrap();
+
+        assert_eq!(balance_of(&pool, wallet_id).await, BigDecimal::from(70));
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn highest_expense_ignores_income(pool: PgPool) {
         let wallet_id = seed_wallet(&pool, 100).await;

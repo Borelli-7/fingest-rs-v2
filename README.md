@@ -129,6 +129,7 @@ Everything not listed here is byte-identical to v1, including error body shape
 | D13 | non-money route, malformed JSON | `"The amount is invalid"` | `"Invalid request data"` |
 | D14 | `GET /api/capabilities` | no such route | reports enabled plugins and declared capabilities |
 | D15 | `POST /api/auth/register` with `"admin": true` | creates an admin | field ignored; account is never admin |
+| D16 | `PUT .../wallets/{id}` with a different `amount.currency` | accepted, existing entries orphaned | 400 `CurrencyMismatch`; amount changes are recorded as `WalletBalanceAdjusted` |
 
 Two further fixes change no status code and so have no D-number:
 

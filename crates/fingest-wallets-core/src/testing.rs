@@ -220,7 +220,7 @@ impl WalletReader for InMemoryStore {
 
 enum Op {
     InsertWallet { owner: String, wallet: Wallet },
-    UpdateWallet(Wallet),
+    RenameWallet { wallet_id: i32, name: String },
     DeleteWallet(i32),
     InsertExpense { wallet_id: i32, expense: Expense },
     UpdateExpense(Expense),
@@ -282,8 +282,11 @@ impl WalletTx for InMemoryTx {
         Ok(id)
     }
 
-    async fn update_wallet(&mut self, wallet: &Wallet) -> Result<u64, PortError> {
-        self.ops.push(Op::UpdateWallet(wallet.clone()));
+    async fn rename_wallet(&mut self, wallet_id: i32, name: &str) -> Result<u64, PortError> {
+        self.ops.push(Op::RenameWallet {
+            wallet_id,
+            name: name.to_owned(),
+        });
         Ok(1)
     }
 
@@ -355,9 +358,9 @@ impl WalletTx for InMemoryTx {
         for op in self.ops {
             match op {
                 Op::InsertWallet { owner, wallet } => wallets.push(OwnedWallet { owner, wallet }),
-                Op::UpdateWallet(updated) => {
-                    if let Some(row) = wallets.iter_mut().find(|r| r.wallet.id == updated.id) {
-                        row.wallet = updated;
+                Op::RenameWallet { wallet_id, name } => {
+                    if let Some(row) = wallets.iter_mut().find(|r| r.wallet.id == Some(wallet_id)) {
+                        row.wallet.name = name;
                     }
                 }
                 Op::DeleteWallet(id) => wallets.retain(|r| r.wallet.id != Some(id)),
