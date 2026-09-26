@@ -170,12 +170,26 @@ mod tests {
         assert_eq!(err, ConfigError::WeakJwtSecret);
     }
 
+    /// Length is the only property of a secret that can be checked mechanically, so a
+    /// long placeholder is accepted and a 31-character one is not.
     #[test]
-    fn the_v1_sample_placeholder_is_rejected_only_when_short() {
-        // sample.env ships a 60-char placeholder, so it passes length but should still be
-        // changed in production; length is the only thing we can mechanically enforce.
-        let long_placeholder = "your-secret-key-min-32-characters-change-in-production";
-        assert!(long_placeholder.len() >= MIN_JWT_SECRET_LEN);
+    fn the_minimum_secret_length_is_exactly_32() {
+        let with_secret = |secret: String| {
+            Config::from_source(source(&[
+                ("DATABASE_URL", "postgres://x/db"),
+                ("JWT_SECRET", secret.as_str()),
+            ]))
+        };
+
+        assert_eq!(
+            with_secret("a".repeat(MIN_JWT_SECRET_LEN - 1)).unwrap_err(),
+            ConfigError::WeakJwtSecret
+        );
+        assert!(with_secret("a".repeat(MIN_JWT_SECRET_LEN)).is_ok());
+        assert!(
+            with_secret("your-secret-key-min-32-characters-change-in-production".to_owned())
+                .is_ok()
+        );
     }
 
     #[test]
