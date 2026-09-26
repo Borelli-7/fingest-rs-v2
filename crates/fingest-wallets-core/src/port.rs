@@ -59,6 +59,14 @@ pub trait WalletTx: Send {
         wallet_id: i32,
     ) -> Result<Option<Wallet>, PortError>;
 
+    /// Read inside the transaction so a balance delta is never computed from a copy that
+    /// a concurrent update or delete has already superseded.
+    async fn find_expense(
+        &mut self,
+        wallet_id: i32,
+        expense_id: i32,
+    ) -> Result<Option<Expense>, PortError>;
+
     async fn insert_wallet(&mut self, login: &str, wallet: &Wallet) -> Result<i32, PortError>;
 
     async fn update_wallet(&mut self, wallet: &Wallet) -> Result<u64, PortError>;

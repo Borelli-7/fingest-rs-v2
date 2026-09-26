@@ -289,8 +289,12 @@ impl WalletService {
         )
         .await?;
 
-        let existing = self
-            .reader
+        let mut tx = self.unit_of_work.begin().await?;
+
+        let Some(mut wallet) = tx.find_owned(login, wallet_id).await? else {
+            return Err(WalletsError::wallet_not_found_for_user(wallet_id, login));
+        };
+        let existing = tx
             .find_expense(wallet_id, expense_id)
             .await?
             .ok_or_else(|| WalletsError::expense_not_found(expense_id))?;
@@ -305,11 +309,6 @@ impl WalletService {
         )?
         .with_id(expense_id);
 
-        let mut tx = self.unit_of_work.begin().await?;
-
-        let Some(mut wallet) = tx.find_owned(login, wallet_id).await? else {
-            return Err(WalletsError::wallet_not_found_for_user(wallet_id, login));
-        };
         if !tx.category_exists(&updated.category).await? {
             return Err(WalletsError::unknown_category(
                 &updated.category.name,
@@ -319,7 +318,9 @@ impl WalletService {
 
         let delta = wallet.replace(&existing, &updated)?;
 
-        tx.update_expense(&updated).await?;
+        if tx.update_expense(&updated).await? == 0 {
+            return Err(WalletsError::expense_not_found(expense_id));
+        }
         tx.adjust_balance(wallet_id, &delta).await?;
 
         let events = [
@@ -346,19 +347,15 @@ impl WalletService {
         wallet_id: i32,
         expense_id: i32,
     ) -> Result<(), WalletsError> {
-        let existing = {
-            self.require_owned(login, wallet_id).await?;
-            self.reader
-                .find_expense(wallet_id, expense_id)
-                .await?
-                .ok_or_else(|| WalletsError::expense_not_found(expense_id))?
-        };
-
         let mut tx = self.unit_of_work.begin().await?;
 
         let Some(mut wallet) = tx.find_owned(login, wallet_id).await? else {
             return Err(WalletsError::wallet_not_found_for_user(wallet_id, login));
         };
+        let existing = tx
+            .find_expense(wallet_id, expense_id)
+            .await?
+            .ok_or_else(|| WalletsError::expense_not_found(expense_id))?;
 
         // Removing an entry must undo its effect on the balance; v1 left the balance stale.
         let delta = wallet.reverse(&existing)?;

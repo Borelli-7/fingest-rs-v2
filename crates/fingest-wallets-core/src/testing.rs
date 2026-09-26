@@ -273,6 +273,14 @@ impl WalletTx for InMemoryTx {
         Ok(self.store.find_owned_now(login, wallet_id))
     }
 
+    async fn find_expense(
+        &mut self,
+        wallet_id: i32,
+        expense_id: i32,
+    ) -> Result<Option<Expense>, PortError> {
+        WalletReader::find_expense(&*self.store, wallet_id, expense_id).await
+    }
+
     async fn insert_wallet(&mut self, login: &str, wallet: &Wallet) -> Result<i32, PortError> {
         let id = self.store.next_wallet_id.fetch_add(1, Ordering::SeqCst);
         self.ops.push(Op::InsertWallet {
@@ -314,8 +322,16 @@ impl WalletTx for InMemoryTx {
     }
 
     async fn update_expense(&mut self, expense: &Expense) -> Result<u64, PortError> {
+        let exists = self
+            .store
+            .expenses
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .any(|row| row.expense.id == expense.id);
+
         self.ops.push(Op::UpdateExpense(expense.clone()));
-        Ok(1)
+        Ok(u64::from(exists))
     }
 
     async fn delete_expense(&mut self, wallet_id: i32, expense_id: i32) -> Result<u64, PortError> {
