@@ -1,7 +1,7 @@
 //! In-memory doubles for identity use-case tests.
 
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -12,6 +12,7 @@ use crate::{
     account::{Account, NameField, Password, StoredAccount},
     claims::Claims,
     port::{AccountRepository, PasswordHasher, TokenError, TokenIssuer, TokenVerifier},
+    service::AuthService,
 };
 
 #[derive(Default)]
@@ -31,6 +32,21 @@ impl InMemoryAccountRepository {
                 account: Account::new(login, None, None, false).expect("valid fixture"),
                 password_hash: None,
             }]),
+        }
+    }
+
+    /// Accounts with the given admin flags and a placeholder hash.
+    pub fn with_accounts(accounts: &[(&str, bool)]) -> Self {
+        Self {
+            rows: Mutex::new(
+                accounts
+                    .iter()
+                    .map(|(login, admin)| StoredAccount {
+                        account: Account::new(*login, None, None, *admin).expect("valid fixture"),
+                        password_hash: Some("hash".to_owned()),
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -109,6 +125,17 @@ impl AccountRepository for InMemoryAccountRepository {
         rows.retain(|row| row.account.login != login);
         Ok((before - rows.len()) as u64)
     }
+}
+
+/// An `AuthService` over `accounts`, wired with the fake hasher and tokens.
+pub fn auth_service(accounts: Arc<InMemoryAccountRepository>) -> AuthService {
+    let tokens = Arc::new(FakeTokens);
+    AuthService::new(
+        accounts,
+        Arc::new(CountingHasher::new()),
+        tokens.clone(),
+        tokens,
+    )
 }
 
 /// Reversible stand-in for bcrypt that also records how often it was asked to verify,

@@ -103,6 +103,20 @@ impl AuthService {
             .verify(token)
             .map_err(|e| IdentityError::Unauthenticated(e.to_string()))
     }
+
+    /// A token outlives the account state it was minted from. Re-reads the account so a
+    /// deleted user is rejected and a demoted admin loses admin rights immediately, rather
+    /// than when the token expires.
+    pub async fn current_principal(&self, mut claims: Claims) -> Result<Claims, IdentityError> {
+        let Some(stored) = self.accounts.find(&claims.sub).await? else {
+            return Err(IdentityError::Unauthenticated(
+                "Account no longer exists".to_owned(),
+            ));
+        };
+
+        claims.admin = stored.account.admin;
+        Ok(claims)
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +265,45 @@ mod tests {
             err,
             IdentityError::Unauthenticated("User has no password set".to_owned())
         );
+    }
+
+    fn claims_for(login: &str, admin: bool) -> Claims {
+        Claims {
+            sub: login.to_owned(),
+            admin,
+            exp: 0,
+            iat: 0,
+        }
+    }
+
+    #[test]
+    fn a_token_for_a_deleted_account_is_rejected() {
+        let svc = service(
+            Arc::new(InMemoryAccountRepository::new()),
+            Arc::new(CountingHasher::new()),
+        );
+
+        let err = block_on(svc.current_principal(claims_for("ghost", true))).unwrap_err();
+
+        assert_eq!(
+            err,
+            IdentityError::Unauthenticated("Account no longer exists".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_stale_admin_claim_is_replaced_by_the_stored_flag() {
+        let repo = Arc::new(InMemoryAccountRepository::new());
+        let svc = service(repo.clone(), Arc::new(CountingHasher::new()));
+        block_on(svc.register(new_account("bob", "correct-horse"))).unwrap();
+
+        let principal = block_on(svc.current_principal(claims_for("bob", true))).unwrap();
+
+        assert!(
+            !principal.admin,
+            "a demoted admin must not keep admin rights"
+        );
+        assert_eq!(principal.sub, "bob");
     }
 
     #[test]
