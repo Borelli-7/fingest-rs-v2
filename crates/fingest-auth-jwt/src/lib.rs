@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::Duration;
 use fingest_identity_core::{
     Account, Claims, Password, PasswordHasher, TokenError, TokenIssuer, TokenVerifier,
@@ -28,23 +29,38 @@ impl BcryptHasher {
     }
 }
 
+/// bcrypt costs hundreds of milliseconds of CPU; run it on the blocking pool so it never
+/// occupies an actix worker thread.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, PortError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| PortError::Unavailable(format!("password hashing task failed: {e}")))
+}
+
+#[async_trait]
 impl PasswordHasher for BcryptHasher {
-    fn hash(&self, password: &Password) -> Result<String, PortError> {
-        bcrypt::hash(password.expose(), self.cost).map_err(|e| PortError::Encoding(e.to_string()))
+    async fn hash(&self, password: &Password) -> Result<String, PortError> {
+        let (password, cost) = (password.expose().to_owned(), self.cost);
+        blocking(move || bcrypt::hash(password, cost))
+            .await?
+            .map_err(|e| PortError::Encoding(e.to_string()))
     }
 
-    fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
-        match bcrypt::verify(password, hash) {
-            Ok(valid) => Ok(valid),
-            // A stored value that is not a bcrypt hash — v1 seeded plaintext passwords —
-            // is a failed authentication, not a server error.
-            Err(_) => Ok(false),
-        }
+    async fn verify(&self, password: &str, hash: &str) -> Result<bool, PortError> {
+        let (password, hash) = (password.to_owned(), hash.to_owned());
+        // A stored value that is not a bcrypt hash — v1 seeded plaintext passwords —
+        // is a failed authentication, not a server error.
+        blocking(move || bcrypt::verify(password, &hash).unwrap_or(false)).await
     }
 
-    fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
-        let _ = bcrypt::verify(password, &self.dummy_hash);
-        Ok(())
+    async fn verify_dummy(&self, password: &str) -> Result<(), PortError> {
+        let (password, hash) = (password.to_owned(), self.dummy_hash.clone());
+        blocking(move || {
+            let _ = bcrypt::verify(password, &hash);
+        })
+        .await
     }
 }
 
@@ -115,41 +131,67 @@ mod tests {
 
     // --- hashing ---
 
-    #[test]
-    fn hash_is_not_the_plaintext_and_verifies() {
+    #[tokio::test]
+    async fn hash_is_not_the_plaintext_and_verifies() {
         let hasher = BcryptHasher::new(4).unwrap(); // low cost keeps the test fast
         let password = Password::new("correct-horse").unwrap();
 
-        let hash = hasher.hash(&password).unwrap();
+        let hash = hasher.hash(&password).await.unwrap();
 
         assert_ne!(hash, "correct-horse");
-        assert!(hasher.verify("correct-horse", &hash).unwrap());
-        assert!(!hasher.verify("wrong-horse", &hash).unwrap());
+        assert!(hasher.verify("correct-horse", &hash).await.unwrap());
+        assert!(!hasher.verify("wrong-horse", &hash).await.unwrap());
     }
 
-    #[test]
-    fn hashes_are_salted_so_two_runs_differ() {
+    #[tokio::test]
+    async fn hashes_are_salted_so_two_runs_differ() {
         let hasher = BcryptHasher::new(4).unwrap();
         let password = Password::new("correct-horse").unwrap();
 
         assert_ne!(
-            hasher.hash(&password).unwrap(),
-            hasher.hash(&password).unwrap()
+            hasher.hash(&password).await.unwrap(),
+            hasher.hash(&password).await.unwrap()
         );
     }
 
     /// v1 seeded plaintext passwords; verifying against one must fail closed, not 500.
-    #[test]
-    fn a_non_bcrypt_stored_value_fails_authentication() {
+    #[tokio::test]
+    async fn a_non_bcrypt_stored_value_fails_authentication() {
         let hasher = BcryptHasher::new(4).unwrap();
 
-        assert!(!hasher.verify("password123", "password123").unwrap());
+        assert!(!hasher.verify("password123", "password123").await.unwrap());
     }
 
-    #[test]
-    fn dummy_verification_succeeds_without_revealing_anything() {
+    #[tokio::test]
+    async fn dummy_verification_succeeds_without_revealing_anything() {
         let hasher = BcryptHasher::new(4).unwrap();
-        assert!(hasher.verify_dummy("anything").is_ok());
+        assert!(hasher.verify_dummy("anything").await.is_ok());
+    }
+
+    /// `#[tokio::test]` is single-threaded: if bcrypt ran inline, the ticker could not
+    /// advance until the hash finished.
+    #[tokio::test]
+    async fn hashing_does_not_block_the_executor() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hasher = BcryptHasher::new(10).unwrap();
+        let password = Password::new("correct-horse").unwrap();
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+
+        hasher.hash(&password).await.unwrap();
+        let observed = ticks.load(Ordering::SeqCst);
+        ticker.abort();
+
+        assert!(observed > 0, "other tasks must run while bcrypt works");
     }
 
     // --- tokens ---

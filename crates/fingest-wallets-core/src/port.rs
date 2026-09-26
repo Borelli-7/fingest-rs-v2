@@ -69,7 +69,8 @@ pub trait WalletTx: Send {
 
     async fn insert_wallet(&mut self, login: &str, wallet: &Wallet) -> Result<i32, PortError>;
 
-    async fn update_wallet(&mut self, wallet: &Wallet) -> Result<u64, PortError>;
+    /// Touches only the name, so it can never write back a stale balance.
+    async fn rename_wallet(&mut self, wallet_id: i32, name: &str) -> Result<u64, PortError>;
 
     async fn delete_wallet(&mut self, wallet_id: i32) -> Result<u64, PortError>;
 

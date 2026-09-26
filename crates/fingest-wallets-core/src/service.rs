@@ -126,6 +126,8 @@ impl WalletService {
         Ok(wallet.with_id(id))
     }
 
+    /// The wallet is re-read under lock inside the transaction; v1-style "read, mutate,
+    /// write every column" let a concurrent expense's balance change be overwritten.
     pub async fn update_wallet(
         &self,
         login: &str,
@@ -133,20 +135,34 @@ impl WalletService {
         patch: WalletPatch,
     ) -> Result<Wallet, WalletsError> {
         self.require_user(login).await?;
-        let mut wallet = self
-            .require_owned_distinguishing(login, wallet_id, "Not authorized to update this wallet")
+        self.require_owned_distinguishing(login, wallet_id, "Not authorized to update this wallet")
             .await?;
+
+        let mut tx = self.unit_of_work.begin().await?;
+        let Some(mut wallet) = tx.find_owned(login, wallet_id).await? else {
+            return Err(WalletsError::wallet_not_found(wallet_id));
+        };
 
         if let Some(name) = patch.name {
             wallet.rename(name)?;
-        }
-        if let Some(amount) = patch.amount {
-            amount.require_non_negative()?;
-            wallet.amount = amount;
+            tx.rename_wallet(wallet_id, &wallet.name).await?;
         }
 
-        let mut tx = self.unit_of_work.begin().await?;
-        tx.update_wallet(&wallet).await?;
+        if let Some(amount) = patch.amount {
+            let delta = wallet.set_balance(amount)?;
+            if delta != Money::zero(delta.currency.clone()) {
+                tx.adjust_balance(wallet_id, &delta).await?;
+
+                let events = [DomainEvent::WalletBalanceAdjusted {
+                    wallet_id,
+                    delta,
+                    balance: wallet.amount.clone(),
+                }];
+                tx.append_events(&envelopes(&events, self.clock.now_utc())?)
+                    .await?;
+            }
+        }
+
         tx.commit().await?;
 
         Ok(wallet)
@@ -481,6 +497,85 @@ mod tests {
 
         assert!(matches!(err, WalletsError::Validation(_)));
         assert_eq!(store.wallet_count(), 1, "nothing may be written");
+    }
+
+    // --- update_wallet ---
+
+    #[test]
+    fn renaming_leaves_the_balance_and_the_outbox_alone() {
+        let store = store();
+
+        let updated = block_on(service(Arc::clone(&store)).update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: Some("Daily".into()),
+                amount: None,
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(updated.name, "Daily");
+        assert_eq!(store.balance_of(WALLET).unwrap(), pln(100));
+        assert!(store.recorded_events().is_empty());
+    }
+
+    /// The rename must not write back the balance it read: a concurrent expense may have
+    /// moved it in between.
+    #[test]
+    fn renaming_preserves_a_balance_changed_since_it_was_read() {
+        let store = store();
+        let svc = service(Arc::clone(&store));
+        block_on(svc.record_expense(OWNER, WALLET, new_expense(30, food()))).unwrap();
+
+        block_on(svc.update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: Some("Daily".into()),
+                amount: None,
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(store.balance_of(WALLET).unwrap(), pln(70));
+    }
+
+    #[test]
+    fn setting_the_amount_moves_the_balance_by_a_delta_and_records_it() {
+        let store = store();
+
+        block_on(service(Arc::clone(&store)).update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: None,
+                amount: Some(pln(250)),
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(store.balance_of(WALLET).unwrap(), pln(250));
+        assert_eq!(store.recorded_events(), vec!["WalletBalanceAdjusted"]);
+    }
+
+    #[test]
+    fn switching_the_wallet_currency_is_rejected_and_nothing_is_written() {
+        let store = store();
+
+        let err = block_on(service(Arc::clone(&store)).update_wallet(
+            OWNER,
+            WALLET,
+            WalletPatch {
+                name: Some("Dollars".into()),
+                amount: Some(money(100, "USD")),
+            },
+        ))
+        .unwrap_err();
+
+        assert!(matches!(err, WalletsError::BadRequest(_)));
+        assert_eq!(store.balance_of(WALLET).unwrap(), pln(100));
+        assert!(store.recorded_events().is_empty());
     }
 
     // --- record_expense ---

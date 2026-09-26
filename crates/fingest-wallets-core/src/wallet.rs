@@ -57,6 +57,19 @@ impl Wallet {
         Ok(())
     }
 
+    /// Sets the balance to `target` and returns the delta to persist.
+    ///
+    /// The currency is fixed at creation: switching it would leave every existing entry
+    /// in a currency the wallet no longer accepts.
+    pub fn set_balance(&mut self, target: Money) -> Result<Money, DomainError> {
+        self.require_compatible(&target)?;
+        target.require_non_negative()?;
+
+        let delta = target.sub(&self.amount)?;
+        self.amount = target;
+        Ok(delta)
+    }
+
     /// Deviation D8: v1 accepted a mismatched currency and then updated the balance with
     /// `WHERE amount_currency = $1`, which matched no row — the entry was recorded and the
     /// balance silently drifted. Rejecting is the only way to keep the balance meaningful.
@@ -238,6 +251,38 @@ mod tests {
         let mut wallet = wallet(100);
         assert!(wallet.rename("").is_err());
         assert_eq!(wallet.name, "Main");
+    }
+
+    #[test]
+    fn set_balance_returns_the_delta() {
+        let mut wallet = wallet(100);
+
+        let delta = wallet.set_balance(pln(250)).unwrap();
+
+        assert_eq!(delta, pln(150));
+        assert_eq!(wallet.amount, pln(250));
+    }
+
+    #[test]
+    fn set_balance_refuses_to_switch_currency() {
+        let mut wallet = wallet(100);
+
+        assert!(matches!(
+            wallet.set_balance(money(100, "USD")).unwrap_err(),
+            DomainError::CurrencyMismatch { .. }
+        ));
+        assert_eq!(wallet.amount, pln(100));
+    }
+
+    #[test]
+    fn set_balance_rejects_a_negative_target() {
+        let mut wallet = wallet(100);
+
+        assert_eq!(
+            wallet.set_balance(pln(-1)).unwrap_err(),
+            DomainError::NegativeAmount
+        );
+        assert_eq!(wallet.amount, pln(100));
     }
 
     #[test]
