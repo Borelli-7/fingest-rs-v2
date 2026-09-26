@@ -51,7 +51,7 @@ impl AuthService {
             return Err(IdentityError::already_exists(&account.login));
         }
 
-        let hash = self.hasher.hash(&password)?;
+        let hash = self.hasher.hash(&password).await?;
         Ok(self.accounts.insert(&account, &hash).await?)
     }
 
@@ -78,18 +78,18 @@ impl AuthService {
             password_hash,
         }) = self.accounts.find(login).await?
         else {
-            self.hasher.verify_dummy(password)?;
+            self.hasher.verify_dummy(password).await?;
             return Err(IdentityError::invalid_credentials());
         };
 
         let Some(hash) = password_hash else {
-            self.hasher.verify_dummy(password)?;
+            self.hasher.verify_dummy(password).await?;
             return Err(IdentityError::Unauthenticated(
                 "User has no password set".to_owned(),
             ));
         };
 
-        if !self.hasher.verify(password, &hash)? {
+        if !self.hasher.verify(password, &hash).await? {
             return Err(IdentityError::invalid_credentials());
         }
 
