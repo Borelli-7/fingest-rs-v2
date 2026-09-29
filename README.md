@@ -184,7 +184,7 @@ checksum validation, so use a fresh database.
 | `CORS_ALLOWED_ORIGIN` | `http://localhost:8081` | |
 | `PLUGINS` | `tracing` | comma-separated; `tracing`, `in-process`. Empty disables publishing. `in-process` delivers only to subscribers attached to the composition root's publisher; with none attached, events stay pending instead of being dropped |
 | `AUTH_RATE_LIMIT` | `10` | attempts per client address, and per login, on `/api/auth/login` and `/register`; then 429 |
-| `AUTH_RATE_WINDOW_SECS` | `60` | window for `AUTH_RATE_LIMIT`. Counted per instance; behind a proxy, limit there too |
+| `AUTH_RATE_WINDOW_SECS` | `60` | window for `AUTH_RATE_LIMIT`. Counted per instance; behind a proxy, limit there too. IPv6 clients are counted per /64. At most 100,000 keys are tracked per window; when full, new clients get 429 until expired windows are swept |
 | `OUTBOX_RETENTION_HOURS` | `168` | published outbox rows older than this are purged hourly; `0` keeps them forever |
 | `RUST_LOG` | `info` | |
 
@@ -210,7 +210,9 @@ jmeter -n -t tests/fingest_performance_test.jmx -JPORT=8080 -l results.jtl
 ## Events
 
 State changes append to an `outbox` table inside the same transaction. A background relay
-polls every 5 seconds and hands batches to the configured publishers.
+polls every 5 seconds and hands batches of 100 to the configured publishers. While batches
+come back full it drains the next one immediately, up to 100 batches per tick, so a backlog
+is not limited to one batch per poll.
 
 Delivery is **at-least-once** — rows are marked published only after a successful publish, so a
 broker outage leaves them pending rather than dropping them. Subscribers must be idempotent.

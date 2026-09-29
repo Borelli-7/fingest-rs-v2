@@ -285,7 +285,7 @@ C4Component
 
     Container_Boundary(relaybox, "fingest-events") {
         Component(oreader, "PgOutboxReader", "sqlx", "fetch_unpublished, mark_published")
-        Component(relay, "OutboxRelay", "tokio task", "drain_once every 5s, batch of 100")
+        Component(relay, "OutboxRelay", "tokio task", "drain_pass every 5s: batches of 100 until one is short, at most 100 per tick")
         Component(pubs, "TracingPublisher · InProcessPublisher", "EventPublisher", "")
     }
 
@@ -415,12 +415,14 @@ sequenceDiagram
                 F-->>R: Ok
                 R->>O: mark_published(&ids)
                 O->>DB: UPDATE outbox SET published_at = now()
+                Note over R,DB: a full batch is followed at once by the next, up to 100 per tick
             end
         end
     end
 ```
 
-Relay errors are logged and retried on the next tick. The task is spawned detached, so a
+Relay errors are logged and retried on the next tick; a failure also ends the current pass,
+so a failing publisher is never retried in a tight loop. The task is spawned detached, so a
 broker outage never takes the API down with it.
 
 ## Architecture patterns

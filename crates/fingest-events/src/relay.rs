@@ -10,6 +10,10 @@ use crate::outbox::OutboxReader;
 /// How often [`OutboxRelay::run`] purges old published rows when retention is set.
 const PURGE_EVERY: Duration = Duration::from_secs(3600);
 
+/// Upper bound on batches per tick, so a pass under sustained load still ends and the
+/// purge still gets its turn. With the default batch size that is 10,000 events a tick.
+const MAX_BATCHES_PER_PASS: usize = 100;
+
 /// Drains the outbox and hands events to a publisher.
 ///
 /// Delivery is **at-least-once**: if publishing succeeds but the row cannot be marked, the
@@ -19,6 +23,7 @@ pub struct OutboxRelay {
     reader: Arc<dyn OutboxReader>,
     publisher: Arc<dyn EventPublisher>,
     batch_size: i64,
+    max_batches_per_pass: usize,
     retention: Option<Duration>,
 }
 
@@ -28,12 +33,18 @@ impl OutboxRelay {
             reader,
             publisher,
             batch_size: 100,
+            max_batches_per_pass: MAX_BATCHES_PER_PASS,
             retention: None,
         }
     }
 
     pub fn with_batch_size(mut self, batch_size: i64) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    pub fn with_max_batches_per_pass(mut self, max_batches: usize) -> Self {
+        self.max_batches_per_pass = max_batches.max(1);
         self
     }
 
@@ -71,6 +82,37 @@ impl OutboxRelay {
         Ok(envelopes.len())
     }
 
+    /// Publishes batches until one comes back short, up to the per-pass cap. Returns how
+    /// many events were delivered.
+    ///
+    /// Draining one batch per tick capped throughput at `batch_size / interval` however
+    /// large the backlog. An error ends the pass, so a failing publisher backs off to the
+    /// tick interval instead of spinning.
+    pub async fn drain_pass(&self) -> Result<usize, PortError> {
+        let mut delivered = 0;
+
+        for _ in 0..self.max_batches_per_pass {
+            let count = match self.drain_once().await {
+                Ok(count) => count,
+                Err(err) => {
+                    if delivered > 0 {
+                        tracing::debug!(delivered, "outbox pass stopped after partial progress");
+                    }
+                    return Err(err);
+                }
+            };
+            delivered += count;
+
+            if (count as i64) < self.batch_size {
+                break;
+            }
+            // Other tasks on this worker get a turn between full batches.
+            tokio::task::yield_now().await;
+        }
+
+        Ok(delivered)
+    }
+
     /// Deletes published rows past the retention window. A no-op when none is set.
     pub async fn purge_once(&self) -> Result<u64, PortError> {
         match self.retention {
@@ -89,9 +131,9 @@ impl OutboxRelay {
         loop {
             ticker.tick().await;
 
-            match self.drain_once().await {
+            match self.drain_pass().await {
                 Ok(0) => {}
-                Ok(count) => tracing::debug!(count, "outbox batch published"),
+                Ok(count) => tracing::debug!(count, "outbox events published"),
                 Err(err) => tracing::warn!(error = %err, "outbox relay pass failed; will retry"),
             }
 

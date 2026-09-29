@@ -89,7 +89,9 @@ impl BudgetRepository for PgBudgetRepository {
     }
 
     /// Spending is summed across every wallet the owner holds, restricted to the budget's
-    /// own period, its currency and non-income entries. There is no FX conversion, so an
+    /// own period, its currency and its exact category. A category is `(name, profit)`, so
+    /// an expense category never counts towards an income budget of the same name, nor the
+    /// reverse; an income budget sums the matching income. There is no FX conversion, so an
     /// entry in another currency cannot count towards the budget.
     async fn list_with_spent(
         &self,
@@ -102,8 +104,7 @@ impl BudgetRepository for PgBudgetRepository {
             SELECT b.id, b.category_name, b.category_profit,
                    b.total_amount, b.total_currency, b.start_date, b.end_date,
                    COALESCE(SUM(
-                       CASE WHEN e.category_profit = false
-                             AND e.amount_currency = b.total_currency
+                       CASE WHEN e.amount_currency = b.total_currency
                              AND e.date BETWEEN b.start_date AND b.end_date
                             THEN e.amount_amount ELSE 0 END
                    ), 0) AS "spent_amount!"
@@ -111,6 +112,7 @@ impl BudgetRepository for PgBudgetRepository {
             LEFT JOIN account_wallet aw ON aw.account_login = b.account_login
             LEFT JOIN expense e ON e.wallet_id = aw.wallet_id
                                 AND e.category_name = b.category_name
+                                AND e.category_profit = b.category_profit
             WHERE b.account_login = $1
               AND b.start_date BETWEEN $2 AND $3
               AND b.end_date BETWEEN $4 AND $5
@@ -565,6 +567,72 @@ mod tests {
             found.spent,
             pln(40),
             "the USD entry must not be added as PLN"
+        );
+    }
+
+    /// Categories are `(name, profit)`: the seed ships both `Other` spellings, and each
+    /// budget must count only entries of its own category.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn spending_counts_only_the_budgets_own_category_profit_flag(pool: PgPool) {
+        let repo = PgBudgetRepository::new(pool.clone());
+        let other = |profit| {
+            Budget::new(
+                CategoryRef::new("Other", profit).unwrap(),
+                pln(500),
+                year_2024(),
+            )
+            .unwrap()
+        };
+        let expense_budget = repo.insert(OWNER, &other(false), &no_events).await.unwrap();
+        let income_budget = repo.insert(OWNER, &other(true), &no_events).await.unwrap();
+
+        sqlx::query!(
+            r#"INSERT INTO wallet (id, name, amount_amount, amount_currency)
+               VALUES (9300, 'W', 1000.00, 'PLN')"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            r#"INSERT INTO account_wallet (account_login, wallet_id) VALUES ($1, 9300)"#,
+            OWNER
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            r#"INSERT INTO expense
+               (wallet_id, amount_amount, amount_currency, date, description,
+                category_name, category_profit)
+               VALUES (9300, 75.00, 'PLN', DATE '2024-06-15', 'misc spend', 'Other', false),
+                      (9300, 200.00, 'PLN', DATE '2024-06-16', 'misc income', 'Other', true)"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let listed = repo
+            .list_with_spent(OWNER, &any_window(), &any_window())
+            .await
+            .unwrap();
+        let spent = |id| {
+            listed
+                .iter()
+                .find(|b| b.budget.id == Some(id))
+                .unwrap()
+                .spent
+                .clone()
+        };
+
+        assert_eq!(
+            spent(expense_budget),
+            pln(75),
+            "income in Other/true must not count towards the Other/false budget"
+        );
+        assert_eq!(
+            spent(income_budget),
+            pln(200),
+            "an income budget sums its own income, never the same-named expense category"
         );
     }
 
