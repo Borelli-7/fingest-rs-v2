@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv6Addr};
+
 use actix_web::{HttpRequest, HttpResponse, web};
 use fingest_contracts::{
     LoginRequest, LoginResponse, RegisterRequest, TokenValidationResponse, UserDto,
@@ -31,10 +33,25 @@ fn throttle(limiter: &RateLimiter, keys: &[String]) -> Result<(), ApiError> {
 /// The socket peer, never `X-Forwarded-For`: a client-supplied header would let an
 /// attacker pick a fresh key for every request.
 fn peer_key(req: &HttpRequest) -> String {
-    let ip = req
-        .peer_addr()
-        .map_or_else(|| "unknown".to_owned(), |addr| addr.ip().to_string());
-    format!("ip:{ip}")
+    req.peer_addr().map_or_else(
+        || "ip:unknown".to_owned(),
+        |addr| format!("ip:{}", client_prefix(addr.ip())),
+    )
+}
+
+/// An IPv6 host is normally handed a whole /64, so keying on the full address would let
+/// one client rotate through 2^64 keys. IPv4-mapped peers count as their IPv4 address.
+fn client_prefix(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let [a, b, c, d, ..] = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
+            }
+        },
+    }
 }
 
 pub async fn register(
@@ -289,6 +306,62 @@ mod tests {
         let body: ErrorResponse = test::read_body_json(resp).await;
         assert_eq!(body.status, "429");
         assert_eq!(body.message, "Too many attempts. Try again later.");
+    }
+
+    /// A login of any size is stored as one fixed-size key, and repeats of it are counted.
+    #[actix_web::test]
+    async fn an_oversize_login_is_throttled_under_a_fixed_size_key() {
+        let limiter = web::Data::new(RateLimiter::new(2, std::time::Duration::from_secs(60)));
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(auth_service(Arc::new(
+                    InMemoryAccountRepository::new(),
+                ))))
+                .app_data(limiter.clone())
+                .app_data(json_config_plain())
+                .configure(auth_routes),
+        )
+        .await;
+        let huge = "x".repeat(1 << 20);
+        let attempt = || {
+            test::TestRequest::post()
+                .uri("/api/auth/login")
+                .peer_addr("203.0.113.7:4000".parse().unwrap())
+                .set_json(serde_json::json!({"login": huge, "password": "guess-guess"}))
+                .to_request()
+        };
+
+        let resp = test::call_service(&app, attempt()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(limiter.tracked_keys(), 2, "one peer key and one login key");
+
+        test::call_service(&app, attempt()).await;
+        let resp = test::call_service(&app, attempt()).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(limiter.tracked_keys(), 2);
+    }
+
+    #[actix_web::test]
+    async fn ipv6_peers_are_keyed_by_their_slash_64() {
+        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff:ffff:ffff:ffff".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+
+        assert_eq!(client_prefix(a), client_prefix(b));
+        assert_ne!(client_prefix(a), client_prefix(other));
+    }
+
+    #[actix_web::test]
+    async fn ipv4_peers_keep_their_full_address() {
+        let v4: IpAddr = "203.0.113.7".parse().unwrap();
+        let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+
+        assert_eq!(client_prefix(v4), v4);
+        assert_eq!(client_prefix(mapped), v4);
+        assert_ne!(
+            client_prefix("203.0.113.8".parse().unwrap()),
+            client_prefix(v4)
+        );
     }
 
     #[actix_web::test]

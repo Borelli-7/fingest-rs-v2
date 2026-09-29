@@ -197,6 +197,85 @@ mod tests {
         assert_eq!(unpublished_count(&pool).await, 0);
     }
 
+    // --- draining a backlog ---
+
+    /// Fails every publish and counts how often it was asked.
+    #[derive(Default)]
+    struct CountingFailure {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl EventPublisher for CountingFailure {
+        async fn publish(&self, _: &[EventEnvelope]) -> Result<(), fingest_kernel::PortError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(fingest_kernel::PortError::Unavailable("down".into()))
+        }
+    }
+
+    /// One batch per tick used to cap throughput at `batch_size / interval`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn one_pass_drains_a_backlog_of_several_full_batches(pool: PgPool) {
+        for i in 0..6 {
+            append(&pool, &envelope(&format!("user{i}"))).await;
+        }
+        let publisher = Arc::new(RecordingPublisher::new());
+        let relay = relay(&pool, publisher.clone()).with_batch_size(2);
+
+        assert_eq!(relay.drain_pass().await.unwrap(), 6);
+        assert_eq!(publisher.event_types().len(), 6);
+        assert_eq!(unpublished_count(&pool).await, 0);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_pass_stops_at_the_first_short_batch(pool: PgPool) {
+        for login in ["a", "b", "c"] {
+            append(&pool, &envelope(login)).await;
+        }
+        let publisher = Arc::new(RecordingPublisher::new());
+
+        let delivered = relay(&pool, publisher)
+            .with_batch_size(2)
+            .drain_pass()
+            .await
+            .unwrap();
+
+        assert_eq!(delivered, 3);
+    }
+
+    /// A pass must end even under sustained load, so the purge still runs.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_pass_is_capped(pool: PgPool) {
+        for login in ["a", "b", "c", "d", "e"] {
+            append(&pool, &envelope(login)).await;
+        }
+        let publisher = Arc::new(RecordingPublisher::new());
+        let relay = relay(&pool, publisher)
+            .with_batch_size(1)
+            .with_max_batches_per_pass(2);
+
+        assert_eq!(relay.drain_pass().await.unwrap(), 2);
+        assert_eq!(unpublished_count(&pool).await, 3);
+    }
+
+    /// A failing publisher ends the pass after one attempt: no hot loop against the broker.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_failing_publisher_ends_the_pass_after_one_attempt(pool: PgPool) {
+        for login in ["a", "b", "c", "d"] {
+            append(&pool, &envelope(login)).await;
+        }
+        let publisher = Arc::new(CountingFailure::default());
+
+        let result = relay(&pool, publisher.clone())
+            .with_batch_size(1)
+            .drain_pass()
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(publisher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(unpublished_count(&pool).await, 4);
+    }
+
     // --- concurrent relays and retention ---
 
     #[sqlx::test(migrations = "../../migrations")]
