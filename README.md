@@ -242,6 +242,21 @@ requires `POSTGRES_PASSWORD` and `JWT_SECRET` to be supplied.
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views; architecture patterns and where each one is enforced |
 | [docs/adr/](docs/adr/) | Decision records — why hexagonal, why the dependency rule is a test, why the outbox, why compile-time plugins |
 
+### Copilot repository-local skills
+
+For low-token coordination, this repository now includes focused local skills under
+`.github/skills/`:
+
+- `fingest-api-performance`
+- `fingest-api-engineering`
+- `fingest-api-security` (procedure only; not an instruction to run a security audit now)
+- `fingest-api-scalability`
+- `fingest-api-readability`
+
+Use a skill by naming it in your prompt and scope it to the concrete path/endpoint being
+changed (for example `crates/fingest-http/src/wallets.rs`). Each skill requires: scope,
+`file:line` evidence, severity/confidence, focused tests, and concise handoff metadata.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
